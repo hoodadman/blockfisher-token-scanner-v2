@@ -64,7 +64,9 @@ describe('lookupToken', () => {
     expect(lookup).toMatchObject({ address: EVM, chain: { name: 'Base' }, name: 'Pepe', symbol: 'PEPE', failures: [] });
     expect(lookup.signals).toMatchObject({ chain: 'evm', liquidityUsd: 80_000, mintable: true, clusterPct: 12 });
     expect(lookup.foundation.score).toBeGreaterThan(0);
-    expect(fetchMock).toHaveBeenCalledTimes(7);
+    // 7 API calls, plus 6 node calls for our own contract read and 1 for the sell test (unanswered here).
+    expect(fetchMock).toHaveBeenCalledTimes(14);
+    expect(lookup.crossCheck).toBeNull();
   });
 
   it('only looks on Solana for a Solana address, and finds the token on either side of a pair', async () => {
@@ -86,7 +88,8 @@ describe('lookupToken', () => {
 
     expect(lookup).toMatchObject({ chain: { name: 'Solana' }, name: 'Bonk', symbol: 'Bonk' });
     expect(lookup.signals).toMatchObject({ chain: 'solana', canFreeze: false, snipersPct: 2 });
-    expect(fetchMock).toHaveBeenCalledTimes(5);
+    // 5 API calls, plus 1 node call for our own mint read (unanswered here).
+    expect(fetchMock).toHaveBeenCalledTimes(6);
   });
 
   it('still returns a result when a security or holder request fails, and says which part failed', async () => {

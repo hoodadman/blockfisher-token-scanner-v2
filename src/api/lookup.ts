@@ -1,6 +1,7 @@
 import {
   buildSignals,
   coingeckoContractUrl,
+  crossCheckSources,
   exchangeIdsFromCoinGecko,
   goPlusChainId,
   tokenFromDexScreener,
@@ -8,6 +9,7 @@ import {
   twitterHandleFromDexScreener,
   websitesFromDexScreener,
   type CoinGeckoCoin,
+  type CrossCheckEntry,
   type DexScreenerPair,
   type GoPlusEvmToken,
   type GoPlusResponse,
@@ -19,6 +21,7 @@ import { scoreCommunity, type CommunityReport } from '../community';
 import { scoreFoundation, type FoundationReport } from '../foundation';
 import type { TokenSignals } from '../scoring';
 import { apiHosts } from './hosts';
+import { readOnChain, runSellTest } from './onchain';
 import { communityFromBundle, fetchTwitterBundle, TwitterError } from './twitter';
 
 export interface Chain {
@@ -85,6 +88,11 @@ export interface TokenLookup {
   foundation: FoundationReport;
   /** Requests that failed. Their checks show up under "Couldn’t check". */
   failures: SourceFailure[];
+  /**
+   * Our own read of the contract, compared with GoPlus. Null when the chain
+   * couldn't be read; the score then rests on GoPlus alone, as before.
+   */
+  crossCheck: CrossCheckEntry[] | null;
 }
 
 class HttpError extends Error {
@@ -124,7 +132,8 @@ async function fetchGoPlus(chain: Chain, address: string, signal?: AbortSignal) 
 
 /**
  * Finds the token on DexScreener, then runs GoPlus security checks on the chain
- * where it trades most. Holder analysis still comes from InsightX when the key is set.
+ * where it trades most, and reads the contract ourselves as a second opinion.
+ * Holder analysis still comes from InsightX when the key is set.
  */
 export async function lookupToken(input: string, signal?: AbortSignal): Promise<TokenLookup> {
   const address = input.trim();
@@ -149,11 +158,13 @@ export async function lookupToken(input: string, signal?: AbortSignal): Promise<
   const identity = tokenFromDexScreener(pairs, address);
   const twitter = twitterHandleFromDexScreener(pairs);
 
-  const [scan, holders, twitterBundle, gecko] = await Promise.allSettled([
+  const [scan, holders, twitterBundle, gecko, chainRead, sellTest] = await Promise.allSettled([
     fetchGoPlus(chain, address, signal),
     getJson<InsightXDexMetrics>(`${apiHosts().insightx}/dex-metrics/v1/${chain.network}/${address}`, signal),
     fetchTwitterBundle({ handle: twitter, name: identity.name, symbol: identity.symbol }, signal),
     getJson<CoinGeckoCoin>(coingeckoContractUrl(chain.network, address), signal),
+    readOnChain(chain.network, address, signal),
+    runSellTest(chain.network, address, signal),
   ]);
   signal?.throwIfAborted();
 
@@ -162,11 +173,14 @@ export async function lookupToken(input: string, signal?: AbortSignal): Promise<
   if (holders.status === 'rejected') failures.push(failureFrom('holders', holders.reason));
   if (twitterBundle.status === 'rejected') failures.push(failureFrom('community', twitterBundle.reason));
 
-  const signals = buildSignals(chain.network, {
+  const sources = {
     dexScreenerPairs: pairs,
     goPlus: scan.status === 'fulfilled' ? scan.value : undefined,
     insightXDexMetrics: holders.status === 'fulfilled' ? holders.value : undefined,
-  });
+    onChain: chainRead.status === 'fulfilled' ? chainRead.value : undefined,
+    sellTest: sellTest.status === 'fulfilled' ? sellTest.value : undefined,
+  };
+  const signals = buildSignals(chain.network, sources);
   const bundle = twitterBundle.status === 'fulfilled' ? twitterBundle.value : undefined;
 
   return {
@@ -185,6 +199,7 @@ export async function lookupToken(input: string, signal?: AbortSignal): Promise<
       exchangeHints: gecko.status === 'fulfilled' ? exchangeIdsFromCoinGecko(gecko.value) : [],
     }),
     failures,
+    crossCheck: sources.onChain || sources.sellTest ? crossCheckSources(chain.network, sources) : null,
   };
 }
 

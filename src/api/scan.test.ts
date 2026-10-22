@@ -11,6 +11,7 @@ const hosts: ApiHosts = {
   twitter: 'http://scanner.test/api/twitter',
   coingecko: 'http://scanner.test/api/coingecko',
   summarise: 'http://scanner.test/api/summarise',
+  rpc: 'http://scanner.test/api/rpc',
 };
 
 afterEach(() => {

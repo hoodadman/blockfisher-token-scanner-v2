@@ -57,6 +57,17 @@ const PROXIES = [
   },
 ];
 
+// Blockchain nodes for our own contract reads. Same rules as rpcPlugin.ts.
+const RPC_NODES = {
+  eth: ["ETH_RPC_URL", "https://ethereum-rpc.publicnode.com"],
+  base: ["BASE_RPC_URL", "https://base-rpc.publicnode.com"],
+  bsc: ["BSC_RPC_URL", "https://bsc-rpc.publicnode.com"],
+  sol: ["SOLANA_RPC_URL", "https://api.mainnet-beta.solana.com"],
+};
+
+/** Read-only calls the scanner makes. Anything else is refused so the route can't be used as a free node. */
+const RPC_METHODS = new Set(["eth_getCode", "eth_call", "eth_getStorageAt", "getAccountInfo"]);
+
 const MIME = {
   ".html": "text/html; charset=utf-8",
   ".js": "text/javascript; charset=utf-8",
@@ -182,6 +193,39 @@ async function summarise(req, res) {
   sendJson(res, 200, parsed);
 }
 
+async function rpc(req, res, chain) {
+  const entry = Object.hasOwn(RPC_NODES, chain) ? RPC_NODES[chain] : undefined;
+  if (!entry) {
+    sendJson(res, 404, { error: "unknown chain" });
+    return;
+  }
+  const node = process.env[entry[0]]?.trim() || entry[1];
+  // The sell test sends the probe's code along with the call, so allow a few KB.
+  const body = await readBody(req, 16_000);
+  let call;
+  try {
+    call = JSON.parse(body.toString("utf8"));
+  } catch {
+    sendJson(res, 400, { error: "bad-json" });
+    return;
+  }
+  if (Array.isArray(call) || !RPC_METHODS.has(call?.method)) {
+    sendJson(res, 400, { error: "method not allowed" });
+    return;
+  }
+  const upstream = await fetch(node, {
+    method: "POST",
+    headers: { accept: "application/json", "content-type": "application/json" },
+    body,
+  });
+  res.writeHead(upstream.status, {
+    "content-type": "application/json; charset=utf-8",
+    "cache-control": "no-store",
+    "content-security-policy": `frame-ancestors ${FRAME_ANCESTORS}`,
+  });
+  res.end(Buffer.from(await upstream.arrayBuffer()));
+}
+
 async function serveStatic(req, res) {
   const incoming = new URL(req.url || "/", "http://localhost");
   let rel = decodeURIComponent(incoming.pathname);
@@ -231,6 +275,11 @@ const server = http.createServer(async (req, res) => {
     }
     if (pathname === "/api/summarise" && req.method === "POST") {
       await summarise(req, res);
+      return;
+    }
+    const rpcRoute = pathname.match(/^\/api\/rpc\/([a-z]+)$/);
+    if (rpcRoute && req.method === "POST") {
+      await rpc(req, res, rpcRoute[1]);
       return;
     }
     if (pathname.startsWith("/api/")) {

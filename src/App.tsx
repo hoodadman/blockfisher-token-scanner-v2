@@ -5,6 +5,7 @@ import { ScorePanel } from './components/ScorePanel';
 import { ScoreTriangle } from './components/ScoreTriangle';
 import { TokenSearch } from './components/TokenSearch';
 import { averageScore, scoreToken, type TrustReport } from './scoring';
+import { crossCheckLine } from './summary/crosscheck';
 import { summaryFacts } from './summary/facts';
 
 const MESSAGES = {
@@ -91,6 +92,7 @@ function Result({ lookup, report }: { lookup: TokenLookup; report: TrustReport }
   const holdersNeedKey = failures.some(({ source, status }) => source === 'holders' && (status === 401 || status === 403));
   const twitterNeedKey = failures.some(({ source, status }) => source === 'community' && (status === 401 || status === 403));
   const showSymbol = symbol && symbol !== name;
+  const checkedTwice = crossCheckLine(lookup.crossCheck);
   const overall = averageScore([report.score, community?.score, foundation.score]);
   const facts = useMemo(
     () => summaryFacts({ name, overall, security: report, community, foundation }),
@@ -121,6 +123,8 @@ function Result({ lookup, report }: { lookup: TokenLookup; report: TrustReport }
               : 'Some checks couldn’t run because part of the data was unavailable. Try again in a minute.'}
         </p>
       )}
+
+      {checkedTwice && <p className="notice">{checkedTwice}</p>}
 
       <div className="result__split">
         <div className="result__visual">

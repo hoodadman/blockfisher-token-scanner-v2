@@ -3,6 +3,7 @@ export interface ApiHosts {
   twitter: string;
   coingecko: string;
   summarise: string;
+  rpc: string;
 }
 
 const defaults: ApiHosts = {
@@ -10,6 +11,7 @@ const defaults: ApiHosts = {
   twitter: '/api/twitter',
   coingecko: '/api/coingecko',
   summarise: '/api/summarise',
+  rpc: '/api/rpc',
 };
 
 let current: ApiHosts = defaults;

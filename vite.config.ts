@@ -1,5 +1,6 @@
 import { defineConfig, loadEnv, type ProxyOptions } from 'vite';
 import react from '@vitejs/plugin-react';
+import { rpcPlugin } from './rpcPlugin.ts';
 import { scanPlugin } from './scanPlugin.ts';
 import { summarisePlugin } from './summarisePlugin.ts';
 
@@ -29,7 +30,7 @@ export default defineConfig(({ mode }) => {
   };
 
   return {
-    plugins: [react(), summarisePlugin(env), scanPlugin()],
+    plugins: [react(), summarisePlugin(env), rpcPlugin(env), scanPlugin()],
     server: { proxy },
     preview: { proxy },
   };
