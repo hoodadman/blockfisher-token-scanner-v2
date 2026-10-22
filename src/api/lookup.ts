@@ -45,7 +45,12 @@ const GOPLUS = 'https://api.gopluslabs.io';
 /** Our own server forwards this to InsightX and adds the API key (see vite.config.ts). */
 const TIMEOUT_MS = 20_000;
 
-function chainsFor(address: string): readonly Chain[] {
+function chainsFor(address: string, network?: InsightXNetwork): readonly Chain[] {
+  if (network) {
+    const chain = SUPPORTED_CHAINS.find((item) => item.network === network);
+    const family = network === 'sol' ? SOLANA_ADDRESS : EVM_ADDRESS;
+    return chain && family.test(address) ? [chain] : [];
+  }
   if (EVM_ADDRESS.test(address)) return EVM_CHAINS;
   if (SOLANA_ADDRESS.test(address)) return SOLANA_CHAINS;
   return [];
@@ -124,11 +129,12 @@ async function fetchGoPlus(chain: Chain, address: string, signal?: AbortSignal) 
 
 /**
  * Finds the token on DexScreener, then runs GoPlus security checks on the chain
- * where it trades most. Holder analysis still comes from InsightX when the key is set.
+ * where it trades most (or on `network`, when the caller already knows the chain).
+ * Holder analysis still comes from InsightX when the key is set.
  */
-export async function lookupToken(input: string, signal?: AbortSignal): Promise<TokenLookup> {
+export async function lookupToken(input: string, signal?: AbortSignal, network?: InsightXNetwork): Promise<TokenLookup> {
   const address = input.trim();
-  const chains = chainsFor(address);
+  const chains = chainsFor(address, network);
   if (chains.length === 0) throw new LookupError('invalid');
 
   const listings = await Promise.allSettled(
