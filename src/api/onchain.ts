@@ -109,6 +109,8 @@ const PROBE = '0x00000000000000000000000000000000005e11a5';
 const BUYER = '0x00000000000000000000000000000000005e11b0';
 const TEST_AMOUNT = '0x2386f26fc10000'; // 0.01 of the chain's coin
 const BUYER_BALANCE = '0xde0b6b3a7640000'; // 1 coin, to cover the test amount
+// Generous, because a sell that runs out of gas inside the probe would look like a blocked sell.
+const PROBE_GAS = '0x7a1200'; // 8,000,000
 
 const word = (address: string) => address.toLowerCase().replace(/^0x/, '').padStart(64, '0');
 
@@ -126,7 +128,7 @@ export async function runSellTest(network: InsightXNetwork, address: string, sig
       network,
       'eth_call',
       [
-        { from: BUYER, to: PROBE, value: TEST_AMOUNT, gas: '0x2dc6c0', data: `${PROBE_SELECTOR}${word(router)}${word(address)}` },
+        { from: BUYER, to: PROBE, value: TEST_AMOUNT, gas: PROBE_GAS, data: `${PROBE_SELECTOR}${word(router)}${word(address)}` },
         'latest',
         { [PROBE]: { code: SELL_PROBE_CODE }, [BUYER]: { balance: BUYER_BALANCE } },
       ],
