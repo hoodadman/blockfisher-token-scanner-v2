@@ -1,11 +1,9 @@
 import type { TokenSignals } from '../scoring';
+import { ownerGaveUp } from './onchain';
 import { anyTrue, compact, isNumber } from './util';
 
 /** Numeric chain IDs for GET /api/v1/token_security/{chain_id}. Solana uses a separate path. */
 export type GoPlusChainId = '1' | '8453' | '56' | 'solana';
-
-const ZERO = '0x0000000000000000000000000000000000000000';
-const DEAD = '0x000000000000000000000000000000000000dead';
 
 export interface GoPlusResponse<T> {
   code?: number;
@@ -71,12 +69,6 @@ function taxPct(value: string | number | undefined): number | undefined {
   const number = Number(value);
   if (!Number.isFinite(number)) return undefined;
   return number <= 1 ? number * 100 : number;
-}
-
-function ownerGaveUp(address: string | undefined): boolean | undefined {
-  if (address === undefined) return undefined;
-  const normalised = address.toLowerCase();
-  return normalised === '' || normalised === ZERO || normalised === DEAD;
 }
 
 function lockedLiquidityPct(holders: GoPlusEvmToken['lp_holders']): number | undefined {

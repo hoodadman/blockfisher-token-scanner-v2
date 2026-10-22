@@ -1,6 +1,7 @@
 import { averageScore, scoreToken } from '../scoring';
 import { localBrief } from '../summary/local';
 import { fetchBrief } from '../summary/fetch';
+import { crossCheckLine } from '../summary/crosscheck';
 import { summaryFacts } from '../summary/facts';
 import { LookupError, isTokenAddress, lookupToken } from './lookup';
 import { withApiHosts, type ApiHosts } from './hosts';
@@ -54,6 +55,8 @@ export async function runScan(input: string, hosts: ApiHosts): Promise<ScanResul
         `Community: ${brief.community}`,
         `Foundation: ${brief.foundation}`,
       ];
+      const checkedTwice = crossCheckLine(lookup.crossCheck);
+      if (checkedTwice) lines.push('', checkedTwice);
       if (lookup.failures.length > 0) {
         lines.push('', `Some checks did not run: ${lookup.failures.map((failure) => failure.source).join(', ')}.`);
       }

@@ -15,5 +15,5 @@
     "noUnusedParameters": true,
     "noFallthroughCasesInSwitch": true
   },
-  "include": ["src", "vite.config.ts", "summarisePlugin.ts", "scanPlugin.ts"]
+  "include": ["src", "vite.config.ts", "summarisePlugin.ts", "scanPlugin.ts", "rpcPlugin.ts"]
 }
