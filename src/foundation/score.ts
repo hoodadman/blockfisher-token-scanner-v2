@@ -175,8 +175,9 @@ function fundingPoints(input: {
   exchangeHints: readonly string[];
 }): { points: number; fact: FoundationFact; exchanges: string[]; investors: string[]; presaleUsd?: number } {
   const hintText = input.exchangeHints.join('\n');
-  const majors = [...new Set([...labelsFrom(MAJOR_EXCHANGES, input.text), ...labelsFrom(MAJOR_EXCHANGES, hintText)])];
-  const others = [...new Set([...labelsFrom(OTHER_EXCHANGES, input.text), ...labelsFrom(OTHER_EXCHANGES, hintText)])];
+  // Listings come only from CoinGecko's exchange data. Anyone can write "Binance" in a bio.
+  const majors = labelsFrom(MAJOR_EXCHANGES, hintText);
+  const others = labelsFrom(OTHER_EXCHANGES, hintText);
   const investors = labelsFrom(INVESTORS, input.text);
   const presaleUsd = parseRaiseUsd(input.text);
 

@@ -433,8 +433,20 @@ export const CHECKS: readonly CheckDefinition[] = [
     passLabel: 'Healthy trading pool',
     category: 'market',
     measure: (s) => dollars(s.liquidityUsd ?? 0),
-    evaluate: (s) =>
-      below(s.liquidityUsd, [
+    evaluate: (s, now) => {
+      // Pools still on a launchpad (such as pump.fun) report no size. On a token this new,
+      // not knowing is a risk in itself.
+      const hours = ageInHours(s, now);
+      if (s.liquidityUsd === undefined && hours !== undefined && hours < 7 * 24) {
+        return {
+          severity: 'warning',
+          points: 20,
+          title: 'Trading pool size unknown',
+          summary: 'This token is new and we couldn’t see how much is available for trading.',
+          details: tooltipFor('liquidity'),
+        };
+      }
+      return below(s.liquidityUsd, [
         [10_000, {
           severity: 'warning',
           points: 20,
@@ -449,7 +461,8 @@ export const CHECKS: readonly CheckDefinition[] = [
           summary: 'Only {value} is available for trading.',
           details: tooltipFor('liquidity'),
         }],
-      ]),
+      ]);
+    },
   },
   {
     id: 'tokenAge',
@@ -460,15 +473,15 @@ export const CHECKS: readonly CheckDefinition[] = [
     evaluate: (s, now) =>
       below(ageInHours(s, now), [
         [24, {
-          severity: 'minor',
-          points: 5,
+          severity: 'warning',
+          points: 20,
           title: 'Brand-new token',
           summary: 'It started trading {value} ago.',
           details: tooltipFor('tokenAge'),
         }],
         [7 * 24, {
           severity: 'minor',
-          points: 2,
+          points: 5,
           title: 'New token',
           summary: 'It started trading {value} ago.',
           details: tooltipFor('tokenAge'),

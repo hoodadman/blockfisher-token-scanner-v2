@@ -166,6 +166,21 @@ describe('scoreToken', () => {
     expect(score({ ...cleanEvm, canTakeTokens: true }).score).toBe(39);
   });
 
+  it('keeps a token under a day old out of the low-risk band', () => {
+    const report = score({ ...cleanSolana, launchedAt: NOW - 3 * 3_600_000 });
+    expect(issueIds(report)).toEqual(['tokenAge']);
+    expect(report.score).toBe(79);
+    expect(report.band).toBe('medium');
+  });
+
+  it('flags an unknown pool size on a new token, but not on an old one', () => {
+    const fresh = score({ ...cleanSolana, liquidityUsd: undefined, launchedAt: NOW - 3 * 3_600_000 });
+    expect(issueIds(fresh)).toEqual(['liquidity', 'tokenAge']);
+    // 20 + 20 × 0.6
+    expect(fresh.score).toBe(68);
+    expect(issueIds(score({ ...cleanSolana, liquidityUsd: undefined }))).toEqual([]);
+  });
+
   it('lists issues from most to least severe', () => {
     const report = score({ ...cleanEvm, ownershipRenounced: false, mintable: true, honeypotRisk: 100 });
     expect(report.issues.map((issue) => issue.severity)).toEqual(['critical', 'warning', 'minor']);

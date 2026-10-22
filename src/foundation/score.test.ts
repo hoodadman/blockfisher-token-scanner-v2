@@ -11,8 +11,8 @@ describe('scoreFoundation', () => {
       launchedAt: NOW - 400 * DAY,
       bio: 'Official token. Docs and partners below. @VitalikButerin',
       urls: ['https://example.com/whitepaper.pdf'],
-      websites: ['https://www.coinbase.com/price/pepe'],
       mentionedPeople: [{ handle: 'VitalikButerin', followers: 5_000_000 }],
+      exchangeHints: ['gdax'],
     });
     expect(report.score).toBe(90);
     expect(report.band).toBe('solid');
@@ -45,6 +45,15 @@ describe('scoreFoundation', () => {
     expect(report.score).toBe(16 + 5 + 5);
     expect(report.facts.find((fact) => fact.id === 'backing')?.status).toBe('mid');
     expect(report.facts.find((fact) => fact.id === 'docs')?.status).toBe('mid');
+  });
+
+  it('ignores exchange names the token writes about itself', () => {
+    const report = scoreFoundation({
+      bio: 'Listed on Binance and Coinbase soon!',
+      websites: ['https://www.coinbase.com/price/pepe'],
+    });
+    expect(report.exchanges).toEqual([]);
+    expect(report.score).toBe(0);
   });
 
   it('weights Binance or Coinbase listings very highly', () => {
