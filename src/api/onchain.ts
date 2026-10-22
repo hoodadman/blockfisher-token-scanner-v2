@@ -1,5 +1,6 @@
-import type { EvmContractRead, InsightXNetwork, OnChainRead, SolanaMintAccount } from '../adapters';
+import type { EvmContractRead, InsightXNetwork, OnChainRead, SellTest, SolanaMintAccount } from '../adapters';
 import { apiHosts } from './hosts';
+import { PROBE_SELECTOR, SELL_PROBE_CODE } from './sellProbe';
 
 const TIMEOUT_MS = 10_000;
 
@@ -10,6 +11,9 @@ const PROXY_SLOTS = [
   '0xc5f16f0fcc639fa48a6947836d9850f504798523bf8c9a3a87d5876cf622bcf7', // EIP-1822 (UUPS)
   '0x7050c9e0f4ca769c69bd3a8ef740bc37934f8e2c036e5a723fd8ee048ed3f8c3', // OpenZeppelin legacy
 ];
+
+// Slots that hold an implementation address directly (the beacon slot holds a beacon, not code).
+const IMPLEMENTATION_SLOTS = new Set([PROXY_SLOTS[0], PROXY_SLOTS[2], PROXY_SLOTS[3]]);
 
 const OWNER = '0x8da5cb5b'; // owner()
 const GET_OWNER = '0x893d20e8'; // getOwner(), common on BNB Chain tokens
@@ -63,10 +67,15 @@ async function readEvmContract(network: InsightXNetwork, address: string, signal
     callForAddress(network, address, OWNER, signal),
     Promise.all(PROXY_SLOTS.map((slot) => rpc<string>(network, 'eth_getStorageAt', [address, slot, 'latest'], signal))),
   ]);
+  // Behind a proxy the functions that matter live in the implementation, so scan that code instead.
+  const implementation = PROXY_SLOTS.map((slot, i) => (IMPLEMENTATION_SLOTS.has(slot) ? addressFromWord(slots[i]) : undefined)).find(
+    (found) => found !== undefined && !isEmptyWord(found),
+  );
   return {
     code,
     owner: owner ?? (await callForAddress(network, address, GET_OWNER, signal)),
     proxySlots: slots.filter((word) => !isEmptyWord(word)),
+    ...(implementation && { implementationCode: await rpc<string>(network, 'eth_getCode', [implementation, 'latest'], signal) }),
   };
 }
 
@@ -86,4 +95,56 @@ export async function readOnChain(network: InsightXNetwork, address: string, sig
   return network === 'sol'
     ? { kind: 'solana', mint: await readSolanaMint(address, signal) }
     : { kind: 'evm', contract: await readEvmContract(network, address, signal) };
+}
+
+// Uniswap V2 style routers with the most token launches on each chain. The probe asks each for its wrapped coin.
+const ROUTERS: Partial<Record<InsightXNetwork, string>> = {
+  eth: '0x7a250d5630b4cf539739df2c5dacb4c659f2488d', // Uniswap V2
+  base: '0x4752ba5dbc23f44d87826276bf6fd6b1c372ad24', // Uniswap V2
+  bsc: '0x10ed43c718714eb63d5aa57b78b54704e256024e', // PancakeSwap V2
+};
+
+// Made-up addresses that only exist inside the simulation.
+const PROBE = '0x00000000000000000000000000000000005e11a5';
+const BUYER = '0x00000000000000000000000000000000005e11b0';
+const TEST_AMOUNT = '0x2386f26fc10000'; // 0.01 of the chain's coin
+const BUYER_BALANCE = '0xde0b6b3a7640000'; // 1 coin, to cover the test amount
+
+const word = (address: string) => address.toLowerCase().replace(/^0x/, '').padStart(64, '0');
+
+/**
+ * Simulates buying a little of the token and selling it straight back, without
+ * sending anything. Resolves undefined when the test can't run here (Solana, or
+ * no pool on the router); rejects when the node can't be reached.
+ */
+export async function runSellTest(network: InsightXNetwork, address: string, signal?: AbortSignal): Promise<SellTest | undefined> {
+  const router = ROUTERS[network];
+  if (!router) return undefined;
+  let result: string;
+  try {
+    result = await rpc<string>(
+      network,
+      'eth_call',
+      [
+        { from: BUYER, to: PROBE, value: TEST_AMOUNT, gas: '0x2dc6c0', data: `${PROBE_SELECTOR}${word(router)}${word(address)}` },
+        'latest',
+        { [PROBE]: { code: SELL_PROBE_CODE }, [BUYER]: { balance: BUYER_BALANCE } },
+      ],
+      signal,
+    );
+  } catch (error) {
+    // The whole probe reverts when the router has no pool for this token.
+    if (error instanceof RpcError && error.status === undefined) return undefined;
+    throw error;
+  }
+  const words = result.replace(/^0x/, '').match(/.{64}/g);
+  if (!words || words.length < 5) return undefined;
+  const [stage, buyExpected, buyReceived, sellExpected, sellReceived] = words.map((value) => BigInt(`0x${value}`));
+  return {
+    stage: Number(stage) as SellTest['stage'],
+    buyExpected,
+    buyReceived,
+    sellExpected,
+    sellReceived,
+  };
 }

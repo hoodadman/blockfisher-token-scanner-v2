@@ -200,7 +200,8 @@ async function rpc(req, res, chain) {
     return;
   }
   const node = process.env[entry[0]]?.trim() || entry[1];
-  const body = await readBody(req, 4_000);
+  // The sell test sends the probe's code along with the call, so allow a few KB.
+  const body = await readBody(req, 16_000);
   let call;
   try {
     call = JSON.parse(body.toString("utf8"));

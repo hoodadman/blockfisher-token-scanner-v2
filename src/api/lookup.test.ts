@@ -64,8 +64,8 @@ describe('lookupToken', () => {
     expect(lookup).toMatchObject({ address: EVM, chain: { name: 'Base' }, name: 'Pepe', symbol: 'PEPE', failures: [] });
     expect(lookup.signals).toMatchObject({ chain: 'evm', liquidityUsd: 80_000, mintable: true, clusterPct: 12 });
     expect(lookup.foundation.score).toBeGreaterThan(0);
-    // 7 API calls, plus 6 node calls for our own contract read (unanswered here).
-    expect(fetchMock).toHaveBeenCalledTimes(13);
+    // 7 API calls, plus 6 node calls for our own contract read and 1 for the sell test (unanswered here).
+    expect(fetchMock).toHaveBeenCalledTimes(14);
     expect(lookup.crossCheck).toBeNull();
   });
 

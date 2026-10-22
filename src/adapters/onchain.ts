@@ -1,4 +1,5 @@
 import type { TokenSignals } from '../scoring';
+import { signalsFromBytecode } from './bytecode';
 import { compact } from './util';
 
 // Our own reads of the blockchain, used as a second opinion next to GoPlus.
@@ -40,6 +41,8 @@ export interface EvmContractRead {
   owner?: string;
   /** Non-empty values of the standard proxy slots (EIP-1967, EIP-1822, OpenZeppelin legacy). */
   proxySlots: readonly string[];
+  /** Code the proxy currently runs, when one of those slots points at it. */
+  implementationCode?: string;
 }
 
 export type OnChainRead = { kind: 'solana'; mint: SolanaMintAccount } | { kind: 'evm'; contract: EvmContractRead };
@@ -94,9 +97,11 @@ function signalsFromEvmContract(contract: EvmContractRead): Partial<TokenSignals
   if (contract.code === '0x' || contract.code === '') return {};
   // A filled proxy slot proves the code can be swapped. Empty slots don't prove it can't:
   // custom proxies store the address elsewhere, so we only ever report "yes" here.
+  const ownershipRenounced = ownerGaveUp(contract.owner);
   return compact({
+    ...signalsFromBytecode(contract.implementationCode ?? contract.code, ownershipRenounced),
     upgradeable: contract.proxySlots.length > 0 ? true : undefined,
-    ownershipRenounced: ownerGaveUp(contract.owner),
+    ownershipRenounced,
   });
 }
 
@@ -113,6 +118,11 @@ export interface CrossCheckEntry {
   onChain: TokenSignals[keyof TokenSignals];
 }
 
+/** Measured fees wobble with rounding, so numbers within a percentage point count as the same answer. */
+function same(a: unknown, b: unknown): boolean {
+  return typeof a === 'number' && typeof b === 'number' ? Math.abs(a - b) <= 1 : a === b;
+}
+
 /**
  * Compares what GoPlus said with what we read ourselves. "filled" means GoPlus
  * had no answer and our read supplied one.
@@ -121,7 +131,7 @@ export function crossCheck(goPlus: Partial<TokenSignals>, onChain: Partial<Token
   return (Object.keys(onChain) as Array<keyof TokenSignals>).map((signal) => {
     const ours = onChain[signal];
     const theirs = goPlus[signal];
-    const outcome: CrossCheckOutcome = theirs === undefined ? 'filled' : theirs === ours ? 'agree' : 'disagree';
+    const outcome: CrossCheckOutcome = theirs === undefined ? 'filled' : same(theirs, ours) ? 'agree' : 'disagree';
     return { signal, outcome, goPlus: theirs, onChain: ours };
   });
 }

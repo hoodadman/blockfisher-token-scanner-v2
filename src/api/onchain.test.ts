@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { readOnChain } from './onchain';
+import { readOnChain, runSellTest } from './onchain';
+import { PROBE_SELECTOR, SELL_PROBE_CODE } from './sellProbe';
 
 const TOKEN = '0x6982508145454Ce325dDbE47a25d4ec3d2311933';
 const SOL = 'DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263';
@@ -34,9 +35,17 @@ describe('readOnChain', () => {
 
     expect(read).toEqual({
       kind: 'evm',
-      contract: { code: '0x6080', owner: '0x1111111111111111111111111111111111111111', proxySlots: [word('43506849d7c04f9138d1a2050bbf3a0c054402dd')] },
+      contract: {
+        code: '0x6080',
+        owner: '0x1111111111111111111111111111111111111111',
+        proxySlots: [word('43506849d7c04f9138d1a2050bbf3a0c054402dd')],
+        implementationCode: '0x6080',
+      },
     });
     expect(String(fetchMock.mock.calls[0][0])).toBe('/api/rpc/base');
+    // The implementation's code is fetched too, so the scan reads the functions the proxy really runs.
+    const codeReads = fetchMock.mock.calls.map(([, init]) => JSON.parse(String(init?.body))).filter((call) => call.method === 'eth_getCode');
+    expect(codeReads.map((call) => call.params[0])).toEqual([TOKEN, '0x43506849d7c04f9138d1a2050bbf3a0c054402dd']);
   });
 
   it('falls back to getOwner() when owner() reverts, and leaves the owner unknown if both do', async () => {
@@ -67,5 +76,32 @@ describe('readOnChain', () => {
 
     node(() => ({ result: { value: null } }));
     await expect(readOnChain('sol', SOL)).rejects.toThrow('account not found');
+  });
+});
+
+describe('runSellTest', () => {
+  it('runs the probe in a simulation with our code and a funded buyer, and decodes what came back', async () => {
+    const fetchMock = node(() => ({ result: `0x${[2, 1000, 950, 95, 83].map((n) => n.toString(16).padStart(64, '0')).join('')}` }));
+
+    expect(await runSellTest('bsc', TOKEN)).toEqual({ stage: 2, buyExpected: 1000n, buyReceived: 950n, sellExpected: 95n, sellReceived: 83n });
+
+    const call = JSON.parse(String(fetchMock.mock.calls[0][1]?.body));
+    expect(call.method).toBe('eth_call');
+    const [tx, block, overrides] = call.params;
+    expect(tx.data).toBe(`${PROBE_SELECTOR}${'10ed43c718714eb63d5aa57b78b54704e256024e'.padStart(64, '0')}${TOKEN.slice(2).toLowerCase().padStart(64, '0')}`);
+    expect(block).toBe('latest');
+    expect(overrides[tx.to].code).toBe(SELL_PROBE_CODE);
+    expect(BigInt(overrides[tx.from].balance)).toBeGreaterThan(BigInt(tx.value));
+  });
+
+  it('gives no result on Solana, or when the router has no pool for the token', async () => {
+    expect(await runSellTest('sol', SOL)).toBeUndefined();
+    node(() => ({ error: { message: 'execution reverted' } }));
+    expect(await runSellTest('eth', TOKEN)).toBeUndefined();
+  });
+
+  it('rejects when the node is down', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(null, { status: 502 })));
+    await expect(runSellTest('base', TOKEN)).rejects.toThrow('HTTP 502');
   });
 });

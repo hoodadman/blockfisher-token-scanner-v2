@@ -17,7 +17,8 @@ const NODE_ENV: Record<string, string> = {
 
 /** Read-only calls the scanner makes. Anything else is refused so the route can't be used as a free node. */
 const ALLOWED_METHODS = new Set(['eth_getCode', 'eth_call', 'eth_getStorageAt', 'getAccountInfo']);
-const MAX_BODY = 4_000;
+// The sell test sends the probe's code along with the call, so allow a few KB.
+const MAX_BODY = 16_000;
 
 interface NodeReq {
   method?: string;
