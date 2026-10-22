@@ -1,4 +1,4 @@
-export { scoreToken, BANDS, SEVERITY_CAPS, MIN_COVERAGE } from './score';
+export { scoreToken, totalDeduction, BANDS, SEVERITY_CAPS, STACKING_RATES, MIN_COVERAGE } from './score';
 export type { ScoreOptions } from './score';
 export { averageScore, toneFor } from './overall';
 export type { ScoreTone } from './overall';

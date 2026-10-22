@@ -16,6 +16,13 @@ export const SEVERITY_CAPS: Readonly<Record<Severity, number>> = {
   minor: 100,
 };
 
+/**
+ * Share of each warning or minor penalty that counts, biggest first. Several small powers
+ * held by one issuer should not add up to the same score as a scam. Critical issues always
+ * count in full.
+ */
+export const STACKING_RATES: readonly number[] = [1, 0.6, 0.4, 0.25];
+
 /** Share of the core checks that need data before a score is shown. */
 export const MIN_COVERAGE = 0.5;
 
@@ -63,12 +70,23 @@ export function scoreToken(signals: TokenSignals, options: ScoreOptions = {}): T
     return { score: null, band: null, issues, passed, notChecked, coverage };
   }
 
-  const deducted = issues.reduce((sum, issue) => sum + issue.points, 0);
+  const deducted = totalDeduction(issues);
   const cap = Math.min(100, ...issues.map((issue) => SEVERITY_CAPS[issue.severity]));
-  const score = Math.max(0, Math.min(cap, 100 - deducted));
+  const score = Math.max(0, Math.min(cap, Math.round(100 - deducted)));
   const band = BANDS.find(({ min }) => score >= min)?.band ?? 'high';
 
   return { score, band, issues, passed, notChecked, coverage };
+}
+
+/** Expects issues sorted most severe first, then by points. */
+export function totalDeduction(issues: readonly Issue[]): number {
+  let smaller = 0;
+  return issues.reduce((sum, issue) => {
+    if (issue.severity === 'critical') return sum + issue.points;
+    const rate = STACKING_RATES[Math.min(smaller, STACKING_RATES.length - 1)];
+    smaller += 1;
+    return sum + issue.points * rate;
+  }, 0);
 }
 
 function toIssue(check: CheckDefinition, tier: Tier, measured = ''): Issue {

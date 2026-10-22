@@ -78,7 +78,8 @@ describe('scoreToken', () => {
 
   it('subtracts points for minor issues', () => {
     const report = score({ ...cleanEvm, ownershipRenounced: false, sellFeePct: 6 });
-    expect(report.score).toBe(92);
+    // 5 for the fee, then 3 × 0.6 for ownership.
+    expect(report.score).toBe(93);
     expect(report.band).toBe('low');
   });
 
@@ -147,6 +148,22 @@ describe('scoreToken', () => {
     const risky = { ...cleanSolana, bundlersPct: 40 };
     expect(issueIds(score(risky))).toEqual(['bundlers']);
     expect(score(risky, false).score).toBe(100);
+  });
+
+  it('counts each extra warning or minor issue for less than the one before', () => {
+    // An issuer that can mint, blacklist, pause and upgrade, like a large stablecoin.
+    const report = score({ ...cleanEvm, mintable: true, hasBlacklist: true, canPause: true, upgradeable: true, ownershipRenounced: false });
+    expect(report.issues.map((issue) => issue.points)).toEqual([25, 25, 15, 15, 3]);
+    // 25 + 25 × 0.6 + 15 × 0.4 + 15 × 0.25 + 3 × 0.25, instead of 83 in full.
+    expect(report.score).toBe(50);
+    expect(report.band).toBe('medium');
+  });
+
+  it('still counts critical issues in full alongside smaller ones', () => {
+    const report = score({ ...cleanEvm, canTakeTokens: true, mintable: true, hasBlacklist: true });
+    // 60 + 25 + 25 × 0.6, then capped at 39 by the critical issue.
+    expect(report.score).toBe(0);
+    expect(score({ ...cleanEvm, canTakeTokens: true }).score).toBe(39);
   });
 
   it('lists issues from most to least severe', () => {
