@@ -6,7 +6,7 @@ import { localBrief } from '../summary/local';
 import { fetchBrief } from '../summary/fetch';
 import { summaryFacts } from '../summary/facts';
 import type { PillarBrief } from '../summary/types';
-import { LookupError, isTokenAddress, lookupToken, type SourceFailure } from './lookup';
+import { LookupError, isTokenAddress, lookupToken, type Prefetched, type SourceFailure } from './lookup';
 import { withApiHosts, type ApiHosts } from './hosts';
 
 export interface ScanResult {
@@ -37,8 +37,13 @@ function mark(score: number | null): string {
 }
 
 /** Throws LookupError when the token can't be found. */
-export async function scanReport(address: string, network?: InsightXNetwork, signal?: AbortSignal): Promise<ScanReport> {
-  const lookup = await lookupToken(address, signal, network);
+export async function scanReport(
+  address: string,
+  network?: InsightXNetwork,
+  signal?: AbortSignal,
+  prefetched?: Prefetched,
+): Promise<ScanReport> {
+  const lookup = await lookupToken(address, signal, network, prefetched);
   const security = scoreToken(lookup.signals);
   const community = lookup.community?.score ?? null;
   const foundation = lookup.foundation.score;
