@@ -83,6 +83,8 @@ const running = new Map<string, Promise<ApiReply>>();
 const identities = new TtlCache<IdentifiedToken[]>(IDENTIFY_CACHE_MS);
 // Cached answers don't count: the limit protects the paid APIs behind a fresh scan.
 const scanLimit = new RateLimiter(30, 10 * 60_000);
+// A re-check skips every shared answer, so it costs the most; allow a few.
+const refreshLimit = new RateLimiter(5, 10 * 60_000);
 const identifyLimit = new RateLimiter(120, 10 * 60_000);
 
 export function configure(hosts: ApiHosts): void {
@@ -95,7 +97,8 @@ const tooMany = (seconds: number): ApiReply => ({
 });
 
 export async function handleScan(body: unknown, client: string): Promise<ApiReply> {
-  const raw = (body ?? {}) as { address?: unknown; network?: unknown };
+  const raw = (body ?? {}) as { address?: unknown; network?: unknown; refresh?: unknown };
+  const refresh = raw.refresh === true;
   const address = typeof raw.address === 'string' ? raw.address.trim() : '';
   const network = typeof raw.network === 'string' && (NETWORKS as readonly string[]).includes(raw.network) ? (raw.network as InsightXNetwork) : undefined;
   if (!address) return { status: 400, body: { ok: false, text: 'Send a contract address to scan.' } };
@@ -104,24 +107,30 @@ export async function handleScan(body: unknown, client: string): Promise<ApiRepl
   const prefetched = parsePrefetched(body);
   // Results built from data the client sent are only reused for that client.
   const key = `${prefetched.pairs ? `${client}|` : ''}${network ?? 'any'}:${address.toLowerCase()}`;
-  const cached = scans.get(key);
+  const cached = refresh ? undefined : scans.get(key);
   if (cached) return { status: 200, body: { ok: true, text: scanText(cached), report: cached } };
 
   // The extension asks again if its first request was dropped; share the scan in progress.
   const pending = running.get(key);
   if (pending) return pending;
 
-  const wait = scanLimit.take(client);
+  const wait = Math.max(scanLimit.take(client), refresh ? refreshLimit.take(client) : 0);
   if (wait > 0) return tooMany(wait);
-  const work = runScan(key, address, network, prefetched).finally(() => running.delete(key));
+  const work = runScan(key, address, network, prefetched, refresh).finally(() => running.delete(key));
   running.set(key, work);
   return work;
 }
 
-async function runScan(key: string, address: string, network: InsightXNetwork | undefined, prefetched: Prefetched): Promise<ApiReply> {
+async function runScan(
+  key: string,
+  address: string,
+  network: InsightXNetwork | undefined,
+  prefetched: Prefetched,
+  refresh: boolean,
+): Promise<ApiReply> {
   const started = Date.now();
   try {
-    const report = await scanReport(address, network, undefined, prefetched);
+    const report = await scanReport(address, network, undefined, prefetched, refresh);
     scans.set(key, report);
     const failed = report.failures.map((failure) => `${failure.source}${failure.status ? `:${failure.status}` : ''}`).join(',');
     console.log(`scan ${network ?? 'any'}:${address} ${Date.now() - started}ms${failed ? ` failed=${failed}` : ''}`);

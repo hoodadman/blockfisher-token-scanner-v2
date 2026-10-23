@@ -7,6 +7,7 @@ import { readFile, stat } from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { openStore, sharedFetch } from "./shared-store.mjs";
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const DIST = path.join(ROOT, "dist");
@@ -28,6 +29,8 @@ const PROXIES = [
   {
     prefix: "/api/insightx",
     origin: "https://api.insightx.network",
+    // Shared answers are kept this long (seconds); each request says how old it accepts.
+    keep: 60 * 60,
     headers() {
       const key = process.env.INSIGHTX_API_KEY?.trim();
       return key ? { "X-API-Key": key } : {};
@@ -36,6 +39,7 @@ const PROXIES = [
   {
     prefix: "/api/twitter",
     origin: "https://api.twitter.com",
+    keep: 24 * 60 * 60,
     headers() {
       const raw = process.env.TWITTER_BEARER_TOKEN?.trim();
       if (!raw) return {};
@@ -148,6 +152,7 @@ async function health(res) {
       }
     }),
   );
+  report.sharedStore = (await storeReady).kind;
   report.keys = {
     insightx: Boolean(process.env.INSIGHTX_API_KEY?.trim()),
     twitter: Boolean(process.env.TWITTER_BEARER_TOKEN?.trim()),
@@ -197,9 +202,33 @@ function readBody(req, limit = 100_000) {
   });
 }
 
+/** Paid answers shared between everyone scanning the same token. See shared-store.mjs. */
+const storeReady = openStore();
+
+/** How old a shared answer the caller accepts (x-share-seconds), capped at what we keep. */
+function shareSeconds(req, route) {
+  const asked = Number(req.headers["x-share-seconds"]);
+  return Number.isFinite(asked) && asked > 0 ? Math.min(asked, route.keep) : 0;
+}
+
 async function proxy(req, res, route) {
   const incoming = new URL(req.url || "/", "http://localhost");
   const upstreamPath = incoming.pathname.slice(route.prefix.length) + incoming.search;
+  if (route.keep && (req.method || "GET") === "GET") {
+    const answer = await sharedFetch(await storeReady, `${route.prefix}${upstreamPath}`, shareSeconds(req, route), route.keep, async () => {
+      const upstream = await fetch(`${route.origin}${upstreamPath}`, { headers: { accept: req.headers.accept || "application/json", ...route.headers() } });
+      return { status: upstream.status, type: upstream.headers.get("content-type") || "application/json", body: Buffer.from(await upstream.arrayBuffer()) };
+    });
+    res.writeHead(answer.status, {
+      "content-type": answer.type,
+      "cache-control": "no-store",
+      "content-security-policy": `frame-ancestors ${FRAME_ANCESTORS}`,
+      "x-saved-at": String(answer.savedAt),
+      "x-shared": answer.shared ? "1" : "0",
+    });
+    res.end(answer.body);
+    return;
+  }
   const headers = {
     accept: req.headers.accept || "application/json",
     ...route.headers(),

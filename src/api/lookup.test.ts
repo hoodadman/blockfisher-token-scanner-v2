@@ -183,3 +183,37 @@ describe('lookupToken', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });
+
+describe('lookupToken with shared answers', () => {
+  it('says how old a shared answer it accepts, and reports when each was fetched', async () => {
+    const headersFor: Record<string, Headers> = {};
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.includes('/token-pairs/v1/ethereum/')) return Response.json([pepePair('ethereum', 50_000)]);
+        if (url.includes('/token_security/')) return Response.json({ code: 1, result: { [EVM.toLowerCase()]: {} } });
+        const headers = new Headers(init?.headers);
+        if (url.includes('/dex-metrics/')) {
+          headersFor.holders = headers;
+          return Response.json({ top10_pct: 30 }, { headers: { 'x-saved-at': '5000' } });
+        }
+        if (url.includes('search/recent')) {
+          headersFor.community = headers;
+          return Response.json(noMentions, { headers: { 'x-saved-at': '7000' } });
+        }
+        return new Response(null, { status: 404 });
+      }),
+    );
+
+    const lookup = await lookupToken(EVM, undefined, 'eth');
+    // PEPE launched in 2023, so it accepts day-old community answers and hour-old holder answers.
+    expect(headersFor.community.get('x-share-seconds')).toBe('86400');
+    expect(headersFor.holders.get('x-share-seconds')).toBe('3600');
+    expect(lookup.checked).toEqual({ community: 7000, holders: 5000 });
+
+    await lookupToken(EVM, undefined, 'eth', {}, true);
+    expect(headersFor.community.get('x-share-seconds')).toBe('0');
+    expect(headersFor.holders.get('x-share-seconds')).toBe('0');
+  });
+});
