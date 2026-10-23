@@ -169,7 +169,7 @@ async function extensionRoute(req, res, pathname) {
   }
   let body;
   try {
-    body = JSON.parse((await readBody(req, 8_000)).toString("utf8") || "{}");
+    body = JSON.parse((await readBody(req, 250_000)).toString("utf8") || "{}");
   } catch {
     sendJson(res, 400, { ok: false, text: "Send a JSON body." }, cors);
     return;

@@ -7,6 +7,7 @@ import { setApiHosts, type ApiHosts } from '../api/hosts';
 import { identify, parseCandidates, type IdentifiedToken } from '../api/identify';
 import { LookupError, isTokenAddress } from '../api/lookup';
 import { scanErrorText, scanReport, scanText, type ScanReport } from '../api/scan';
+import { parsePrefetched } from './prefetched';
 
 export interface ApiReply {
   status: number;
@@ -99,14 +100,16 @@ export async function handleScan(body: unknown, client: string): Promise<ApiRepl
   if (!address) return { status: 400, body: { ok: false, text: 'Send a contract address to scan.' } };
   if (!isTokenAddress(address)) return { status: 422, body: { ok: false, text: scanErrorText(new LookupError('invalid')) } };
 
-  const key = `${network ?? 'any'}:${address.toLowerCase()}`;
+  const prefetched = parsePrefetched(body);
+  // Results built from data the client sent are only reused for that client.
+  const key = `${prefetched.pairs ? `${client}|` : ''}${network ?? 'any'}:${address.toLowerCase()}`;
   const cached = scans.get(key);
   if (cached) return { status: 200, body: { ok: true, text: scanText(cached), report: cached } };
 
   const wait = scanLimit.take(client);
   if (wait > 0) return tooMany(wait);
   try {
-    const report = await scanReport(address, network);
+    const report = await scanReport(address, network, undefined, prefetched);
     scans.set(key, report);
     return { status: 200, body: { ok: true, text: scanText(report), report } };
   } catch (error) {

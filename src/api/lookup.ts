@@ -128,17 +128,46 @@ async function fetchGoPlus(chain: Chain, address: string, signal?: AbortSignal) 
 }
 
 /**
+ * Market data the caller already fetched. The Chrome extension fetches DexScreener and
+ * CoinGecko from the user's browser, because both rate-limit shared server addresses.
+ */
+export interface Prefetched {
+  /** DexScreener pairs for the token on `network`. */
+  pairs?: DexScreenerPair[];
+  coingecko?: CoinGeckoCoin;
+}
+
+/**
  * Finds the token on DexScreener, then runs GoPlus security checks on the chain
  * where it trades most (or on `network`, when the caller already knows the chain).
  * Holder analysis still comes from InsightX when the key is set.
  */
-export async function lookupToken(input: string, signal?: AbortSignal, network?: InsightXNetwork): Promise<TokenLookup> {
+export async function lookupToken(
+  input: string,
+  signal?: AbortSignal,
+  network?: InsightXNetwork,
+  prefetched: Prefetched = {},
+): Promise<TokenLookup> {
   const address = input.trim();
   const chains = chainsFor(address, network);
   if (chains.length === 0) throw new LookupError('invalid');
 
+  const wanted = address.toLowerCase();
+  const givenFor = (chain: Chain) =>
+    network
+      ? prefetched.pairs?.filter(
+          (pair) =>
+            pair.chainId === chain.dexScreenerId &&
+            (pair.baseToken?.address?.toLowerCase() === wanted || pair.quoteToken?.address?.toLowerCase() === wanted),
+        )
+      : undefined;
   const listings = await Promise.allSettled(
-    chains.map((chain) => getJson<DexScreenerPair[]>(`${DEXSCREENER}/token-pairs/v1/${chain.dexScreenerId}/${address}`, signal)),
+    chains.map((chain) => {
+      const given = givenFor(chain);
+      return given?.length
+        ? Promise.resolve(given)
+        : getJson<DexScreenerPair[]>(`${DEXSCREENER}/token-pairs/v1/${chain.dexScreenerId}/${address}`, signal);
+    }),
   );
   signal?.throwIfAborted();
 
@@ -159,7 +188,7 @@ export async function lookupToken(input: string, signal?: AbortSignal, network?:
     fetchGoPlus(chain, address, signal),
     getJson<InsightXDexMetrics>(`${apiHosts().insightx}/dex-metrics/v1/${chain.network}/${address}`, signal),
     fetchTwitterBundle({ handle: twitter, name: identity.name, symbol: identity.symbol }, signal),
-    getJson<CoinGeckoCoin>(coingeckoContractUrl(chain.network, address), signal),
+    prefetched.coingecko ? Promise.resolve(prefetched.coingecko) : getJson<CoinGeckoCoin>(coingeckoContractUrl(chain.network, address), signal),
   ]);
   signal?.throwIfAborted();
 

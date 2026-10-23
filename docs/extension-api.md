@@ -30,7 +30,7 @@ Turns what the extension found on a page into tokens it can scan. Send up to 5 c
 { "address": "0x6982508145454Ce325dDbE47a25d4ec3d2311933", "network": "eth" }
 ```
 
-`network` is optional. The reply has `text` (the same summary the OpenClaw agent reads from the dev server) and `report`, the full score: overall, security report and groups, community, foundation, brief and the sources that failed.
+`network` is optional. The extension also sends `pairs` (DexScreener's `token-pairs/v1` answer for that chain) and `coingecko` (the coin's `tickers`), fetched in the user's browser: DexScreener and CoinGecko answer 429 to Render's shared addresses. The server keeps only the fields it reads, uses pairs only when `network` is set, and caches such results per client. Without them it fetches the data itself. The reply has `text` (the same summary the OpenClaw agent reads from the dev server) and `report`, the full score: overall, security report and groups, community, foundation, brief and the sources that failed.
 
 ## Limits
 

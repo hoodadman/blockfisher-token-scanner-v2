@@ -58,3 +58,29 @@ describe('handlers', () => {
     expect((await handleIdentify({ candidates: 'x' }, 'ip')).status).toBe(400);
   });
 });
+
+describe('client-supplied market data', () => {
+  it('scans with pairs from the request instead of asking DexScreener', async () => {
+    const PEPE = '0x6982508145454Ce325dDbE47a25d4ec3d2311933';
+    const fetchMock = vi.fn(async () => new Response(null, { status: 404 }));
+    vi.stubGlobal('fetch', fetchMock);
+    const reply = await handleScan(
+      {
+        address: PEPE,
+        network: 'eth',
+        pairs: [
+          { chainId: 'ethereum', baseToken: { address: PEPE, name: 'Pepe', symbol: 'PEPE' }, liquidity: { usd: 5000 }, evil: 'ignored' },
+          { chainId: 'base', baseToken: { address: PEPE }, liquidity: { usd: 1 } },
+        ],
+        coingecko: { tickers: [{ market: { identifier: 'binance', name: 'Binance' } }] },
+      },
+      'client-a',
+    );
+    expect(reply.status).toBe(200);
+    const body = reply.body as { report: { name?: string; chain: { network: string } } };
+    expect(body.report).toMatchObject({ name: 'Pepe', chain: { network: 'eth' } });
+    const urls = fetchMock.mock.calls.map((call) => String((call as unknown[])[0]));
+    expect(urls.some((url) => url.includes('dexscreener'))).toBe(false);
+    expect(urls.some((url) => url.includes('coingecko'))).toBe(false);
+  });
+});
