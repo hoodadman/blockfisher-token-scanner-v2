@@ -1,8 +1,12 @@
-import { averageScore, scoreToken } from '../scoring';
+import type { InsightXNetwork } from '../adapters';
+import type { CommunityReport } from '../community';
+import type { FoundationReport } from '../foundation';
+import { averageScore, groupSecurity, scoreToken, type GroupedCheck, type TrustReport } from '../scoring';
 import { localBrief } from '../summary/local';
 import { fetchBrief } from '../summary/fetch';
 import { summaryFacts } from '../summary/facts';
-import { LookupError, isTokenAddress, lookupToken } from './lookup';
+import type { PillarBrief } from '../summary/types';
+import { LookupError, isTokenAddress, lookupToken, type SourceFailure } from './lookup';
 import { withApiHosts, type ApiHosts } from './hosts';
 
 export interface ScanResult {
@@ -10,68 +14,109 @@ export interface ScanResult {
   text: string;
 }
 
+/** Everything a client needs to draw the score card. Sent as JSON by the server. */
+export interface ScanReport {
+  address: string;
+  chain: { name: string; network: InsightXNetwork };
+  name?: string;
+  symbol?: string;
+  twitter?: string;
+  overall: number | null;
+  security: TrustReport;
+  securityGroups: GroupedCheck[];
+  community?: CommunityReport;
+  foundation: FoundationReport;
+  brief: PillarBrief;
+  /** False when the language model did not answer and the built-in brief was used. */
+  briefFromModel: boolean;
+  failures: SourceFailure[];
+}
+
 function mark(score: number | null): string {
   return score === null ? 'unavailable' : String(score);
+}
+
+/** Throws LookupError when the token can't be found. */
+export async function scanReport(address: string, network?: InsightXNetwork, signal?: AbortSignal): Promise<ScanReport> {
+  const lookup = await lookupToken(address, signal, network);
+  const security = scoreToken(lookup.signals);
+  const community = lookup.community?.score ?? null;
+  const foundation = lookup.foundation.score;
+  const overall = averageScore([security.score, community, foundation]);
+  const facts = summaryFacts({
+    name: lookup.name,
+    overall,
+    security,
+    community: lookup.community,
+    foundation: lookup.foundation,
+  });
+  const fallback = localBrief(facts);
+  const brief = await fetchBrief(facts, signal);
+  return {
+    address: lookup.address,
+    chain: { name: lookup.chain.name, network: lookup.chain.network },
+    name: lookup.name,
+    symbol: lookup.symbol,
+    twitter: lookup.twitter,
+    overall,
+    security,
+    securityGroups: groupSecurity(security),
+    community: lookup.community,
+    foundation: lookup.foundation,
+    brief,
+    briefFromModel:
+      brief.security !== fallback.security ||
+      brief.community !== fallback.community ||
+      brief.foundation !== fallback.foundation,
+    failures: lookup.failures,
+  };
+}
+
+export function scanText(report: ScanReport): string {
+  const title = report.name ?? 'Unnamed token';
+  const symbol = report.symbol && report.symbol !== report.name ? ` (${report.symbol})` : '';
+  const lines = [
+    `${title}${symbol} on ${report.chain.name}`,
+    report.address,
+    `Overall ${mark(report.overall)}. Security ${mark(report.security.score)}. Community ${mark(report.community?.score ?? null)}. Foundation ${mark(report.foundation.score)}.`,
+    '',
+    `Security: ${report.brief.security}`,
+    `Community: ${report.brief.community}`,
+    `Foundation: ${report.brief.foundation}`,
+  ];
+  if (report.failures.length > 0) {
+    lines.push('', `Some checks did not run: ${report.failures.map((failure) => failure.source).join(', ')}.`);
+  }
+  if (!report.briefFromModel) {
+    lines.push('', 'Built-in summary. The language model did not answer.');
+  }
+  return lines.join('\n');
+}
+
+export function scanErrorText(error: unknown): string {
+  if (error instanceof LookupError && error.reason === 'invalid') {
+    return 'That does not look like a token address. Paste the full contract address.';
+  }
+  if (error instanceof LookupError && error.reason === 'not-found') {
+    const chains = new Intl.ListFormat('en-GB', { type: 'disjunction' }).format(error.searched.map((chain) => chain.name));
+    return `No token found on ${chains}. Check the address.`;
+  }
+  if (error instanceof LookupError && error.reason === 'unavailable') {
+    return 'The market data service did not respond. Try again in a minute.';
+  }
+  return 'The scan failed before it could score this token.';
 }
 
 export async function runScan(input: string, hosts: ApiHosts): Promise<ScanResult> {
   return withApiHosts(hosts, async () => {
     const address = input.trim();
     if (!isTokenAddress(address)) {
-      return {
-        ok: false,
-        text: 'That does not look like a token address. Paste the full contract address.',
-      };
+      return { ok: false, text: scanErrorText(new LookupError('invalid')) };
     }
-
     try {
-      const lookup = await lookupToken(address);
-      const security = scoreToken(lookup.signals);
-      const community = lookup.community?.score ?? null;
-      const foundation = lookup.foundation.score;
-      const overall = averageScore([security.score, community, foundation]);
-      const facts = summaryFacts({
-        name: lookup.name,
-        overall,
-        security,
-        community: lookup.community,
-        foundation: lookup.foundation,
-      });
-      const fallback = localBrief(facts);
-      const brief = await fetchBrief(facts);
-      const fromModel =
-        brief.security !== fallback.security ||
-        brief.community !== fallback.community ||
-        brief.foundation !== fallback.foundation;
-      const title = lookup.name ?? 'Unnamed token';
-      const symbol = lookup.symbol && lookup.symbol !== lookup.name ? ` (${lookup.symbol})` : '';
-      const lines = [
-        `${title}${symbol} on ${lookup.chain.name}`,
-        lookup.address,
-        `Overall ${mark(overall)}. Security ${mark(security.score)}. Community ${mark(community)}. Foundation ${mark(foundation)}.`,
-        '',
-        `Security: ${brief.security}`,
-        `Community: ${brief.community}`,
-        `Foundation: ${brief.foundation}`,
-      ];
-      if (lookup.failures.length > 0) {
-        lines.push('', `Some checks did not run: ${lookup.failures.map((failure) => failure.source).join(', ')}.`);
-      }
-      if (!fromModel) {
-        lines.push('', 'Built-in summary. The language model did not answer.');
-      }
-      return { ok: true, text: lines.join('\n') };
+      return { ok: true, text: scanText(await scanReport(address)) };
     } catch (error) {
-      if (error instanceof LookupError && error.reason === 'not-found') {
-        const chains = new Intl.ListFormat('en-GB', { type: 'disjunction' }).format(
-          error.searched.map((chain) => chain.name),
-        );
-        return { ok: false, text: `No token found on ${chains}. Check the address.` };
-      }
-      if (error instanceof LookupError && error.reason === 'unavailable') {
-        return { ok: false, text: 'The market data service did not respond. Try again in a minute.' };
-      }
-      return { ok: false, text: 'The scan failed before it could score this token.' };
+      return { ok: false, text: scanErrorText(error) };
     }
   });
 }

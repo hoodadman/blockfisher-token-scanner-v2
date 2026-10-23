@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build && node check-dist.mjs",
+    "build": "vite build && vite build --ssr src/server/api.ts --outDir dist-server --emptyOutDir && node check-dist.mjs",
     "start": "node server.mjs",
     "preview": "vite preview",
     "typecheck": "tsc",

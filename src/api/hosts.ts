@@ -19,6 +19,11 @@ export function apiHosts(): ApiHosts {
   return current;
 }
 
+/** The production server points every call at itself once, at startup. */
+export function setApiHosts(hosts: ApiHosts): void {
+  current = hosts;
+}
+
 export async function withApiHosts<T>(hosts: ApiHosts, run: () => Promise<T>): Promise<T> {
   const previous = current;
   current = hosts;

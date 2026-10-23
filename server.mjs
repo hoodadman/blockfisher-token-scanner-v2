@@ -69,14 +69,82 @@ const MIME = {
   ".woff2": "font/woff2",
 };
 
-function sendJson(res, status, body) {
+function sendJson(res, status, body, extraHeaders = {}) {
   const data = JSON.stringify(body);
   res.writeHead(status, {
     "content-type": "application/json; charset=utf-8",
     "cache-control": "no-store",
     "content-security-policy": `frame-ancestors ${FRAME_ANCESTORS}`,
+    ...extraHeaders,
   });
   res.end(data);
+}
+
+/**
+ * The Chrome extension calls /api/scan and /api/identify from its own origin.
+ * EXTENSION_ORIGINS (comma-separated chrome-extension://<id> values) pins it to our
+ * published extension; when unset, any extension origin is allowed, for local testing.
+ */
+const EXTENSION_ORIGINS = (process.env.EXTENSION_ORIGINS || "")
+  .split(",")
+  .map((item) => item.trim())
+  .filter(Boolean);
+
+function corsHeaders(req) {
+  const origin = req.headers.origin;
+  if (!origin) return {};
+  const allowed = EXTENSION_ORIGINS.length > 0 ? EXTENSION_ORIGINS.includes(origin) : origin.startsWith("chrome-extension://");
+  if (!allowed) return {};
+  return {
+    "access-control-allow-origin": origin,
+    "access-control-allow-methods": "POST, OPTIONS",
+    "access-control-allow-headers": "content-type",
+    "access-control-max-age": "600",
+    vary: "origin",
+  };
+}
+
+function clientOf(req) {
+  const forwarded = String(req.headers["x-forwarded-for"] || "").split(",")[0].trim();
+  return forwarded || req.socket.remoteAddress || "unknown";
+}
+
+let extensionApi;
+async function loadExtensionApi() {
+  if (!extensionApi) {
+    extensionApi = await import("./dist-server/api.js");
+    const origin = `http://127.0.0.1:${PORT}`;
+    extensionApi.configure({
+      insightx: `${origin}/api/insightx`,
+      twitter: `${origin}/api/twitter`,
+      coingecko: `${origin}/api/coingecko`,
+      summarise: `${origin}/api/summarise`,
+    });
+  }
+  return extensionApi;
+}
+
+async function extensionRoute(req, res, pathname) {
+  const cors = corsHeaders(req);
+  if (req.method === "OPTIONS") {
+    res.writeHead(204, cors);
+    res.end();
+    return;
+  }
+  if (req.method !== "POST") {
+    sendJson(res, 405, { ok: false, text: "Use POST." }, cors);
+    return;
+  }
+  let body;
+  try {
+    body = JSON.parse((await readBody(req, 8_000)).toString("utf8") || "{}");
+  } catch {
+    sendJson(res, 400, { ok: false, text: "Send a JSON body." }, cors);
+    return;
+  }
+  const api = await loadExtensionApi();
+  const reply = pathname === "/api/scan" ? await api.handleScan(body, clientOf(req)) : await api.handleIdentify(body, clientOf(req));
+  sendJson(res, reply.status, reply.body, cors);
 }
 
 function readBody(req, limit = 100_000) {
@@ -227,6 +295,10 @@ const server = http.createServer(async (req, res) => {
     const route = PROXIES.find((item) => pathname === item.prefix || pathname.startsWith(`${item.prefix}/`));
     if (route) {
       await proxy(req, res, route);
+      return;
+    }
+    if (pathname === "/api/scan" || pathname === "/api/identify") {
+      await extensionRoute(req, res, pathname);
       return;
     }
     if (pathname === "/api/summarise" && req.method === "POST") {
