@@ -124,6 +124,38 @@ async function loadExtensionApi() {
   return extensionApi;
 }
 
+const UPSTREAMS = {
+  dexscreener: "https://api.dexscreener.com/latest/dex/tokens/0x6982508145454Ce325dDbE47a25d4ec3d2311933",
+  goplus: "https://api.gopluslabs.io/api/v1/token_security/1?contract_addresses=0x6982508145454Ce325dDbE47a25d4ec3d2311933",
+  coingecko: "https://api.coingecko.com/api/v3/ping",
+};
+
+/** GET /api/health: can this server load the extension API and reach the data sources? Open it in a browser. */
+async function health(res) {
+  const report = { extensionApi: "ok", upstreams: {} };
+  try {
+    await loadExtensionApi();
+  } catch (error) {
+    report.extensionApi = `failed: ${error instanceof Error ? error.message : String(error)}`;
+  }
+  await Promise.all(
+    Object.entries(UPSTREAMS).map(async ([name, url]) => {
+      try {
+        const response = await fetch(url, { headers: { accept: "application/json" }, signal: AbortSignal.timeout(10_000) });
+        report.upstreams[name] = response.status;
+      } catch (error) {
+        report.upstreams[name] = `failed: ${error instanceof Error ? error.message : String(error)}`;
+      }
+    }),
+  );
+  report.keys = {
+    insightx: Boolean(process.env.INSIGHTX_API_KEY?.trim()),
+    twitter: Boolean(process.env.TWITTER_BEARER_TOKEN?.trim()),
+    openai: Boolean(process.env.OPENAI_API_KEY?.trim()),
+  };
+  sendJson(res, 200, report);
+}
+
 async function extensionRoute(req, res, pathname) {
   const cors = corsHeaders(req);
   if (req.method === "OPTIONS") {
@@ -297,6 +329,10 @@ const server = http.createServer(async (req, res) => {
       await proxy(req, res, route);
       return;
     }
+    if (pathname === "/api/health" && req.method === "GET") {
+      await health(res);
+      return;
+    }
     if (pathname === "/api/scan" || pathname === "/api/identify") {
       await extensionRoute(req, res, pathname);
       return;
@@ -316,7 +352,8 @@ const server = http.createServer(async (req, res) => {
     }
     await serveStatic(req, res);
   } catch (error) {
-    sendJson(res, 502, { error: error instanceof Error ? error.message : "upstream failed" });
+    console.error("request failed", req.url, error);
+    sendJson(res, 502, { ok: false, text: "The scanner hit an error. Try again in a minute.", error: error instanceof Error ? error.message : "upstream failed" });
   }
 });
 

@@ -110,6 +110,7 @@ export async function handleScan(body: unknown, client: string): Promise<ApiRepl
     scans.set(key, report);
     return { status: 200, body: { ok: true, text: scanText(report), report } };
   } catch (error) {
+    if (!(error instanceof LookupError) || error.reason === 'unavailable') console.error('scan failed', address, error);
     const status = error instanceof LookupError ? (error.reason === 'unavailable' ? 502 : 422) : 500;
     return { status, body: { ok: false, text: scanErrorText(error) } };
   }
@@ -130,7 +131,8 @@ export async function handleIdentify(body: unknown, client: string): Promise<Api
     const tokens = await identify(candidates);
     identities.set(key, tokens);
     return { status: 200, body: { ok: true, tokens } };
-  } catch {
+  } catch (error) {
+    console.error('identify failed', error);
     return { status: 502, body: { ok: false, text: 'The market data service did not respond. Try again in a minute.' } };
   }
 }
