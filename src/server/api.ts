@@ -5,7 +5,7 @@
 import type { InsightXNetwork } from '../adapters';
 import { setApiHosts, type ApiHosts } from '../api/hosts';
 import { identify, parseCandidates, type IdentifiedToken } from '../api/identify';
-import { LookupError, isTokenAddress } from '../api/lookup';
+import { LookupError, isTokenAddress, type Prefetched } from '../api/lookup';
 import { scanErrorText, scanReport, scanText, type ScanReport } from '../api/scan';
 import { parsePrefetched } from './prefetched';
 
@@ -79,6 +79,7 @@ export class RateLimiter {
 }
 
 const scans = new TtlCache<ScanReport>(SCAN_CACHE_MS);
+const running = new Map<string, Promise<ApiReply>>();
 const identities = new TtlCache<IdentifiedToken[]>(IDENTIFY_CACHE_MS);
 // Cached answers don't count: the limit protects the paid APIs behind a fresh scan.
 const scanLimit = new RateLimiter(30, 10 * 60_000);
@@ -106,14 +107,27 @@ export async function handleScan(body: unknown, client: string): Promise<ApiRepl
   const cached = scans.get(key);
   if (cached) return { status: 200, body: { ok: true, text: scanText(cached), report: cached } };
 
+  // The extension asks again if its first request was dropped; share the scan in progress.
+  const pending = running.get(key);
+  if (pending) return pending;
+
   const wait = scanLimit.take(client);
   if (wait > 0) return tooMany(wait);
+  const work = runScan(key, address, network, prefetched).finally(() => running.delete(key));
+  running.set(key, work);
+  return work;
+}
+
+async function runScan(key: string, address: string, network: InsightXNetwork | undefined, prefetched: Prefetched): Promise<ApiReply> {
+  const started = Date.now();
   try {
     const report = await scanReport(address, network, undefined, prefetched);
     scans.set(key, report);
+    const failed = report.failures.map((failure) => `${failure.source}${failure.status ? `:${failure.status}` : ''}`).join(',');
+    console.log(`scan ${network ?? 'any'}:${address} ${Date.now() - started}ms${failed ? ` failed=${failed}` : ''}`);
     return { status: 200, body: { ok: true, text: scanText(report), report } };
   } catch (error) {
-    if (!(error instanceof LookupError) || error.reason === 'unavailable') console.error('scan failed', address, error);
+    if (!(error instanceof LookupError) || error.reason === 'unavailable') console.error('scan failed', address, `${Date.now() - started}ms`, error);
     const status = error instanceof LookupError ? (error.reason === 'unavailable' ? 502 : 422) : 500;
     return { status, body: { ok: false, text: scanErrorText(error) } };
   }

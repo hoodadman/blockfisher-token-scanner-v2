@@ -2,7 +2,8 @@ import { MIN_FOLLOWERS, scoreCommunity, type CommunityReport, type MentionInput 
 import type { NamedBacker } from '../foundation';
 import { apiHosts } from './hosts';
 
-const TIMEOUT_MS = 20_000;
+/** Two rounds of calls run one after the other, so keep each short. */
+const TIMEOUT_MS = 10_000;
 
 interface TwitterUser {
   id: string;
