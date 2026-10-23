@@ -123,6 +123,7 @@ async function loadExtensionApi() {
       twitter: `${origin}/api/twitter`,
       coingecko: `${origin}/api/coingecko`,
       summarise: `${origin}/api/summarise`,
+      socials: `${origin}/api/socials`,
     });
   }
   return extensionApi;
@@ -360,6 +361,12 @@ const server = http.createServer(async (req, res) => {
     }
     if (pathname === "/api/health" && req.method === "GET") {
       await health(res);
+      return;
+    }
+    if (pathname === "/api/socials" && req.method === "GET") {
+      const api = await loadExtensionApi();
+      const reply = await api.handleSocials(new URL(req.url || "/", "http://localhost").searchParams, clientOf(req));
+      sendJson(res, reply.status, reply.body);
       return;
     }
     if (pathname === "/api/scan" || pathname === "/api/identify") {

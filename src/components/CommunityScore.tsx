@@ -15,7 +15,7 @@ const NO_SCORE = { label: 'No community page', tagline: 'We couldn’t find rece
 export function CommunityScore({ report, defaultOpen = false }: { report: CommunityReport; defaultOpen?: boolean }) {
   const [open, setOpen] = useState(defaultOpen);
   const panelId = useId();
-  const { score, band, official, mentions } = report;
+  const { score, band, official, mentions, telegram, discord } = report;
   const copy = band ? BAND_COPY[band] : NO_SCORE;
 
   return (
@@ -121,6 +121,25 @@ export function CommunityScore({ report, defaultOpen = false }: { report: Commun
             {mentions.ignoredBots > 0 ? ` (${mentions.ignoredBots} left out)` : ''}.
           </p>
         </div>
+
+        {(telegram || discord) && (
+          <div className="cs-block">
+            <p className="cs-block__title">Telegram and Discord</p>
+            {[
+              { name: 'Telegram', chat: telegram },
+              { name: 'Discord', chat: discord },
+            ].map(({ name, chat }) =>
+              chat ? (
+                <p key={name} className="cs-block__lead">
+                  {`${name}: ${(chat.members ?? 0).toLocaleString('en-GB')} members`}
+                  {chat.online !== undefined ? `, ${chat.online.toLocaleString('en-GB')} online now` : ''}.
+                  {chat.quiet ? ' Very few are online for a group this size, which can mean bought members.' : ''}
+                </p>
+              ) : null,
+            )}
+            <p className="cs-note">People online count for more than members, because members are cheap to fake.</p>
+          </div>
+        )}
       </div>
 
       <footer className="ts__footer">

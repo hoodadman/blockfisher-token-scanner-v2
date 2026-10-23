@@ -3,6 +3,8 @@ export interface ApiHosts {
   twitter: string;
   coingecko: string;
   summarise: string;
+  /** Telegram and Discord member counts, fetched by our server (see chats.ts). */
+  socials: string;
 }
 
 const defaults: ApiHosts = {
@@ -10,6 +12,7 @@ const defaults: ApiHosts = {
   twitter: '/api/twitter',
   coingecko: '/api/coingecko',
   summarise: '/api/summarise',
+  socials: '/api/socials',
 };
 
 let current: ApiHosts = defaults;

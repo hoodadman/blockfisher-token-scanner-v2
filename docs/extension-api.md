@@ -46,6 +46,10 @@ The paid answers are shared between everyone who scans the same token, website a
 
 The score itself is worked out again on every scan from those answers and fresh market data, so nothing a browser sends is ever shown to anyone else. Each answer is kept for its own time and then deleted by the store; there is no daily reset.
 
+## GET /api/socials
+
+`?telegram=<name>&discord=<invite code>`, both optional. Answers `{ telegram?: { name, kind, members, online? }, discord?: { code, members, online } }` from the public t.me page and Discord's invite API, both free. Counts are cached for 6 hours. Scans call it for the Telegram and Discord links DexScreener lists, and the community score adds up to 15 points from them, counting people online more than members.
+
 ## Limits
 
 - Whole results are also cached for 10 minutes per token, so popular tokens cost one scan however many people look.

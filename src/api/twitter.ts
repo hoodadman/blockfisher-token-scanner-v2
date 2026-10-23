@@ -1,5 +1,6 @@
 import { MIN_FOLLOWERS, scoreCommunity, type CommunityReport, type MentionInput } from '../community';
 import type { NamedBacker } from '../foundation';
+import type { ChatCounts } from './chats';
 import { apiHosts } from './hosts';
 import { SHARE_HEADER, savedAt } from './share';
 
@@ -8,7 +9,7 @@ import { SHARE_HEADER, savedAt } from './share';
  * the score: a recent sample of mentions plus X's count of all of them ($0.005 a call),
  * the account's last 15 posts, and at most 5 accounts named in its bio.
  */
-const MENTION_SAMPLE = 15;
+const MENTION_SAMPLE = 10;
 const OWN_POSTS = 15;
 const BIO_PEOPLE = 5;
 
@@ -239,8 +240,10 @@ export async function fetchTwitterBundle(
   };
 }
 
-export function communityFromBundle(bundle: TwitterBundle): CommunityReport {
+export function communityFromBundle(bundle: TwitterBundle, chats: ChatCounts = {}): CommunityReport {
   return scoreCommunity({
+    telegram: chats.telegram,
+    discord: chats.discord,
     official: bundle.profile
       ? { handle: bundle.profile.handle, name: bundle.profile.name, followers: bundle.profile.followers, tweets: bundle.tweets }
       : undefined,

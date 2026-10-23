@@ -19,10 +19,20 @@ export interface MentionSummary {
   total?: number;
 }
 
+export interface ChatSummary {
+  members?: number;
+  online?: number;
+  /** Many members but almost nobody online: often bought members. Their count earns nothing. */
+  quiet: boolean;
+  points: number;
+}
+
 export interface CommunityReport {
   /** 0–100, or null when we found no usable Twitter activity. */
   score: number | null;
   band: ActivityBand | null;
   official?: OfficialPage;
   mentions: MentionSummary;
+  telegram?: ChatSummary;
+  discord?: ChatSummary;
 }
