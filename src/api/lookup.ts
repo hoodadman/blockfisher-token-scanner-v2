@@ -19,6 +19,7 @@ import { scoreCommunity, type CommunityReport } from '../community';
 import { scoreFoundation, type FoundationReport } from '../foundation';
 import type { TokenSignals } from '../scoring';
 import { apiHosts } from './hosts';
+import { SHARE_HEADER, savedAt, shareSeconds } from './share';
 import { communityFromBundle, fetchTwitterBundle, TwitterError } from './twitter';
 
 export interface Chain {
@@ -91,6 +92,8 @@ export interface TokenLookup {
   foundation: FoundationReport;
   /** Requests that failed. Their checks show up under "Couldn’t check". */
   failures: SourceFailure[];
+  /** When shared answers were fetched (ms), when they came from our server's store. */
+  checked: { community?: number; holders?: number };
 }
 
 class HttpError extends Error {
@@ -102,13 +105,14 @@ class HttpError extends Error {
   }
 }
 
-async function getJson<T>(url: string, signal?: AbortSignal): Promise<T> {
+async function getJson<T>(url: string, signal?: AbortSignal, share?: { seconds: number; at?: number }): Promise<T> {
   const timeout = AbortSignal.timeout(TIMEOUT_MS);
   const response = await fetch(url, {
-    headers: { accept: '*/*' },
+    headers: { accept: '*/*', ...(share ? { [SHARE_HEADER]: String(share.seconds) } : {}) },
     signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
   });
   if (!response.ok) throw new HttpError(response.status);
+  if (share) share.at = savedAt(response);
   return (await response.json()) as T;
 }
 
@@ -148,6 +152,8 @@ export async function lookupToken(
   signal?: AbortSignal,
   network?: InsightXNetwork,
   prefetched: Prefetched = {},
+  /** A re-check: don't use shared answers. */
+  fresh = false,
 ): Promise<TokenLookup> {
   const address = input.trim();
   const chains = chainsFor(address, network);
@@ -184,11 +190,14 @@ export async function lookupToken(
   const { chain, pairs } = found.reduce((best, next) => (deepestPool(next.pairs) > deepestPool(best.pairs) ? next : best));
   const identity = tokenFromDexScreener(pairs, address);
   const twitter = twitterHandleFromDexScreener(pairs);
+  const launchedAt = buildSignals(chain.network, { dexScreenerPairs: pairs }).launchedAt;
+  const holderShare: { seconds: number; at?: number } = { seconds: shareSeconds('holders', launchedAt, fresh) };
 
+  // GoPlus runs on every scan: security is what changes fastest when a token is rugged.
   const [scan, holders, twitterBundle, gecko] = await Promise.allSettled([
     fetchGoPlus(chain, address, signal),
-    getJson<InsightXDexMetrics>(`${apiHosts().insightx}/dex-metrics/v1/${chain.network}/${address}`, signal),
-    fetchTwitterBundle({ handle: twitter, name: identity.name, symbol: identity.symbol }, signal),
+    getJson<InsightXDexMetrics>(`${apiHosts().insightx}/dex-metrics/v1/${chain.network}/${address}`, signal, holderShare),
+    fetchTwitterBundle({ handle: twitter, name: identity.name, symbol: identity.symbol }, signal, shareSeconds('community', launchedAt, fresh)),
     prefetched.coingecko ? Promise.resolve(prefetched.coingecko) : getJson<CoinGeckoCoin>(coingeckoContractUrl(chain.network, address), signal),
   ]);
   signal?.throwIfAborted();
@@ -221,6 +230,10 @@ export async function lookupToken(
       exchangeHints: gecko.status === 'fulfilled' ? exchangeIdsFromCoinGecko(gecko.value) : [],
     }),
     failures,
+    checked: {
+      community: bundle?.checkedAt,
+      holders: holders.status === 'fulfilled' ? holderShare.at : undefined,
+    },
   };
 }
 

@@ -30,6 +30,12 @@ export interface ScanReport {
   /** False when the language model did not answer and the built-in brief was used. */
   briefFromModel: boolean;
   failures: SourceFailure[];
+  /**
+   * When the shared parts were fetched (ms since 1970). Community and holder answers are
+   * shared between everyone who scans the token for a while (see share.ts); missing when
+   * this scan fetched them itself without our server.
+   */
+  checked: { community?: number; holders?: number };
 }
 
 function mark(score: number | null): string {
@@ -42,8 +48,9 @@ export async function scanReport(
   network?: InsightXNetwork,
   signal?: AbortSignal,
   prefetched?: Prefetched,
+  fresh = false,
 ): Promise<ScanReport> {
-  const lookup = await lookupToken(address, signal, network, prefetched);
+  const lookup = await lookupToken(address, signal, network, prefetched, fresh);
   const security = scoreToken(lookup.signals);
   const community = lookup.community?.score ?? null;
   const foundation = lookup.foundation.score;
@@ -74,6 +81,7 @@ export async function scanReport(
       brief.community !== fallback.community ||
       brief.foundation !== fallback.foundation,
     failures: lookup.failures,
+    checked: lookup.checked,
   };
 }
 
