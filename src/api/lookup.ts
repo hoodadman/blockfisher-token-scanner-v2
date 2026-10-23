@@ -43,7 +43,8 @@ const SOLANA_ADDRESS = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 const DEXSCREENER = 'https://api.dexscreener.com';
 const GOPLUS = 'https://api.gopluslabs.io';
 /** Our own server forwards this to InsightX and adds the API key (see vite.config.ts). */
-const TIMEOUT_MS = 20_000;
+/** Long waits make the whole scan feel broken; a slow source is reported as not checked instead. */
+const TIMEOUT_MS = 12_000;
 
 function chainsFor(address: string, network?: InsightXNetwork): readonly Chain[] {
   if (network) {

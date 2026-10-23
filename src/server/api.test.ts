@@ -84,3 +84,16 @@ describe('client-supplied market data', () => {
     expect(urls.some((url) => url.includes('coingecko'))).toBe(false);
   });
 });
+
+describe('a repeated scan request', () => {
+  it('shares the scan already running instead of starting another', async () => {
+    const PEPE = '0x6982508145454Ce325dDbE47a25d4ec3d2311933';
+    const fetchMock = vi.fn(async () => new Response(null, { status: 404 }));
+    vi.stubGlobal('fetch', fetchMock);
+    const body = { address: PEPE, network: 'eth', pairs: [{ chainId: 'ethereum', baseToken: { address: PEPE }, liquidity: { usd: 1 } }] };
+    const [first, second] = await Promise.all([handleScan(body, 'client-b'), handleScan(body, 'client-b')]);
+    expect(second).toBe(first);
+    const goPlusCalls = fetchMock.mock.calls.filter((call) => String((call as unknown[])[0]).includes('gopluslabs'));
+    expect(goPlusCalls).toHaveLength(1);
+  });
+});
