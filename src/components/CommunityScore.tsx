@@ -15,7 +15,7 @@ const NO_SCORE = { label: 'No community page', tagline: 'We couldn’t find rece
 export function CommunityScore({ report, defaultOpen = false }: { report: CommunityReport; defaultOpen?: boolean }) {
   const [open, setOpen] = useState(defaultOpen);
   const panelId = useId();
-  const { score, band, official, mentions } = report;
+  const { score, band, official, mentions, telegram, discord } = report;
   const copy = band ? BAND_COPY[band] : NO_SCORE;
 
   return (
@@ -112,13 +112,34 @@ export function CommunityScore({ report, defaultOpen = false }: { report: Commun
           <p className="cs-block__lead">
             {mentions.counted === 0
               ? 'No recent posts from real accounts.'
-              : `${mentions.counted} recent ${mentions.counted === 1 ? 'post' : 'posts'} from other accounts.`}
+              : mentions.total !== undefined
+                ? `${mentions.total} ${mentions.total === 1 ? 'post' : 'posts'} in the last 7 days. We looked closely at the ${mentions.counted} most recent from real accounts.`
+                : `${mentions.counted} recent ${mentions.counted === 1 ? 'post' : 'posts'} from other accounts.`}
           </p>
           <p className="cs-note">
             Larger accounts count for more. Accounts with fewer than 10 followers are treated as bots and ignored
             {mentions.ignoredBots > 0 ? ` (${mentions.ignoredBots} left out)` : ''}.
           </p>
         </div>
+
+        {(telegram || discord) && (
+          <div className="cs-block">
+            <p className="cs-block__title">Telegram and Discord</p>
+            {[
+              { name: 'Telegram', chat: telegram },
+              { name: 'Discord', chat: discord },
+            ].map(({ name, chat }) =>
+              chat ? (
+                <p key={name} className="cs-block__lead">
+                  {`${name}: ${(chat.members ?? 0).toLocaleString('en-GB')} members`}
+                  {chat.online !== undefined ? `, ${chat.online.toLocaleString('en-GB')} online now` : ''}.
+                  {chat.quiet ? ' Very few are online for a group this size, which can mean bought members.' : ''}
+                </p>
+              ) : null,
+            )}
+            <p className="cs-note">People online count for more than members, because members are cheap to fake.</p>
+          </div>
+        )}
       </div>
 
       <footer className="ts__footer">

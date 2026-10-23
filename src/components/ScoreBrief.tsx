@@ -110,7 +110,7 @@ function MentionRow({ report }: { report?: CommunityReport }) {
     <MetricRow
       title={
         report?.mentions.counted
-          ? `${report.mentions.counted} other recent posts`
+          ? `${report.mentions.total ?? report.mentions.counted} other posts this week`
           : 'No recent posts from other accounts'
       }
       note={report?.mentions.ignoredBots ? `${report.mentions.ignoredBots} tiny accounts left out` : undefined}

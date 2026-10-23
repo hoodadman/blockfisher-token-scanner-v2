@@ -1,4 +1,4 @@
-import type { ActivityBand, CommunityReport, MentionSummary, OfficialPage } from './types';
+import type { ActivityBand, ChatSummary, CommunityReport, MentionSummary, OfficialPage } from './types';
 
 export const MIN_FOLLOWERS = 10;
 
@@ -15,6 +15,12 @@ export interface MentionInput {
   reposts: number;
 }
 
+export interface ChatInput {
+  members?: number;
+  /** Undefined when the platform doesn't say (Telegram channels). */
+  online?: number;
+}
+
 export interface CommunityInput {
   official?: {
     handle: string;
@@ -23,6 +29,10 @@ export interface CommunityInput {
     tweets: ReadonlyArray<{ likes: number; replies: number; reposts: number }>;
   };
   mentions?: readonly MentionInput[];
+  /** All mentions in the last 7 days (X's count), when only a sample was read. */
+  mentionTotal?: number;
+  telegram?: ChatInput;
+  discord?: ChatInput;
 }
 
 function clamp(value: number, max: number) {
@@ -64,14 +74,44 @@ export function mentionWeight(mention: MentionInput) {
   return size * buzz;
 }
 
+/**
+ * Mention points were tuned on the 50 most recent mentions. We now read a smaller recent
+ * sample and X's count of all mentions, so scale the sample up to what 50 (or fewer, when
+ * there were fewer) would have weighed. Busy tokens hit the 30-point cap either way.
+ */
+export const MENTION_SCALE_TO = 50;
+
+export function scaledWeights(weights: readonly number[], sampled: number, total: number | undefined): number[] {
+  if (total === undefined || sampled === 0) return [...weights];
+  const factor = Math.max(1, Math.min(total, MENTION_SCALE_TO) / sampled);
+  return weights.map((weight) => weight * factor);
+}
+
 export function mentionPoints(weights: readonly number[]) {
   const total = weights.reduce((sum, value) => sum + value, 0);
   return clamp(Math.log10(1 + total) * 14, 30);
 }
 
+/** Below this share of members online, a big group looks bought. Real groups run 1-10%. */
+export const MIN_ONLINE_SHARE = 0.005;
+const CHATS_MAX = 15;
+
+/**
+ * Telegram and Discord. People online now count most: members are cheap to buy, people
+ * online are not. A big member count with almost nobody online earns nothing for size.
+ */
+export function chatSummary(chat: ChatInput | undefined): ChatSummary | undefined {
+  if (!chat || chat.members === undefined) return undefined;
+  const members = chat.members;
+  const quiet = chat.online !== undefined && members >= 2_000 && chat.online / members < MIN_ONLINE_SHARE;
+  const fromOnline = chat.online === undefined ? 0 : clamp(Math.log10(1 + chat.online) * 4, 8);
+  const fromSize = quiet ? 0 : clamp(Math.log10(1 + members) * (chat.online === undefined ? 1.5 : 1), 5);
+  return { members, online: chat.online, quiet, points: fromOnline + fromSize };
+}
+
 export function scoreCommunity(input: CommunityInput): CommunityReport {
   const official = summariseOfficial(input.official);
-  const mentions = summariseMentions(input.mentions ?? []);
+  const mentions = summariseMentions(input.mentions ?? [], input.mentionTotal);
 
   const fromPage = official
     ? followerPoints(official.followers) +
@@ -79,17 +119,22 @@ export function scoreCommunity(input: CommunityInput): CommunityReport {
       likePoints(official.averageLikes) +
       repostPoints(official.averageReposts)
     : 0;
+  const sample = input.mentions ?? [];
   const fromMentions = mentionPoints(
-    (input.mentions ?? []).map(mentionWeight).filter((weight) => weight > 0),
+    scaledWeights(sample.map(mentionWeight).filter((weight) => weight > 0), sample.length, input.mentionTotal),
   );
 
-  // Without an official page, mentions can only show a weak signal.
-  const raw = official ? fromPage + fromMentions : Math.min(40, fromMentions);
-  const hasAnything = Boolean(official) || mentions.counted > 0;
+  const telegram = chatSummary(input.telegram);
+  const discord = chatSummary(input.discord);
+  const fromChats = Math.min(CHATS_MAX, (telegram?.points ?? 0) + (discord?.points ?? 0));
+
+  // Without an official page, mentions and chats can only show a weak signal.
+  const raw = official ? fromPage + fromMentions + fromChats : Math.min(40, fromMentions + fromChats);
+  const hasAnything = Boolean(official) || mentions.counted > 0 || Boolean(telegram) || Boolean(discord);
   const score = hasAnything ? Math.round(clamp(raw, 100)) : null;
   const band = score === null ? null : (ACTIVITY_BANDS.find(({ min }) => score >= min)?.band ?? 'quiet');
 
-  return { score, band, official, mentions };
+  return { score, band, official, mentions, ...(telegram && { telegram }), ...(discord && { discord }) };
 }
 
 function summariseOfficial(page: CommunityInput['official']): OfficialPage | undefined {
@@ -106,7 +151,7 @@ function summariseOfficial(page: CommunityInput['official']): OfficialPage | und
   };
 }
 
-function summariseMentions(mentions: readonly MentionInput[]): MentionSummary {
+function summariseMentions(mentions: readonly MentionInput[], total?: number): MentionSummary {
   let counted = 0;
   let ignoredBots = 0;
   let weightedReach = 0;
@@ -118,5 +163,5 @@ function summariseMentions(mentions: readonly MentionInput[]): MentionSummary {
       weightedReach += weight;
     }
   }
-  return { counted, ignoredBots, weightedReach };
+  return total === undefined ? { counted, ignoredBots, weightedReach } : { counted, ignoredBots, weightedReach, total };
 }

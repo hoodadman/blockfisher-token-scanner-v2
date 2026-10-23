@@ -11,9 +11,20 @@ export interface OfficialPage {
 }
 
 export interface MentionSummary {
+  /** Posts from real accounts in the sample we read. */
   counted: number;
   ignoredBots: number;
   weightedReach: number;
+  /** All posts mentioning the token in the last 7 days, from X's count, when we have it. */
+  total?: number;
+}
+
+export interface ChatSummary {
+  members?: number;
+  online?: number;
+  /** Many members but almost nobody online: often bought members. Their count earns nothing. */
+  quiet: boolean;
+  points: number;
 }
 
 export interface CommunityReport {
@@ -22,4 +33,6 @@ export interface CommunityReport {
   band: ActivityBand | null;
   official?: OfficialPage;
   mentions: MentionSummary;
+  telegram?: ChatSummary;
+  discord?: ChatSummary;
 }

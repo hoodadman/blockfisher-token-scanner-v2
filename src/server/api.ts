@@ -4,6 +4,7 @@
  */
 import type { InsightXNetwork } from '../adapters';
 import { setApiHosts, type ApiHosts } from '../api/hosts';
+import { DISCORD_CODE, TELEGRAM_NAME, parseTelegramPage, type ChatCounts } from '../api/chats';
 import { identify, parseCandidates, type IdentifiedToken } from '../api/identify';
 import { LookupError, isTokenAddress, type Prefetched } from '../api/lookup';
 import { scanErrorText, scanReport, scanText, type ScanReport } from '../api/scan';
@@ -162,3 +163,61 @@ export async function handleIdentify(body: unknown, client: string): Promise<Api
     return { status: 502, body: { ok: false, text: 'The market data service did not respond. Try again in a minute.' } };
   }
 }
+
+// Member counts change slowly and are free, but keep t.me and Discord from seeing a burst.
+const SOCIALS_CACHE_MS = 6 * 60 * 60_000;
+const telegramCounts = new TtlCache<ChatCounts['telegram'] | null>(SOCIALS_CACHE_MS, 2_000);
+const discordCounts = new TtlCache<ChatCounts['discord'] | null>(SOCIALS_CACHE_MS, 2_000);
+const socialsLimit = new RateLimiter(120, 10 * 60_000);
+
+async function telegramCount(name: string): Promise<ChatCounts['telegram'] | null> {
+  const response = await fetch(`https://t.me/${name}`, { headers: { accept: 'text/html' }, signal: AbortSignal.timeout(6_000) });
+  if (!response.ok) return null;
+  const counts = parseTelegramPage(await response.text());
+  return counts ? { name, ...counts } : null;
+}
+
+async function discordCount(code: string): Promise<ChatCounts['discord'] | null> {
+  const response = await fetch(`https://discord.com/api/v10/invites/${code}?with_counts=true`, {
+    headers: { accept: 'application/json' },
+    signal: AbortSignal.timeout(6_000),
+  });
+  if (!response.ok) return null;
+  const body = (await response.json()) as { approximate_member_count?: number; approximate_presence_count?: number };
+  return typeof body.approximate_member_count === 'number'
+    ? { code, members: body.approximate_member_count, online: body.approximate_presence_count }
+    : null;
+}
+
+async function cached<T>(cache: TtlCache<T | null>, key: string, load: () => Promise<T | null>): Promise<T | undefined> {
+  const hit = cache.get(key);
+  if (hit !== undefined) return hit ?? undefined;
+  try {
+    const value = await load();
+    cache.set(key, value);
+    return value ?? undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** GET /api/socials?telegram=<name>&discord=<code>: member and online counts, both optional. */
+export async function handleSocials(query: URLSearchParams, client: string): Promise<ApiReply> {
+  const telegram = query.get('telegram') ?? '';
+  const discord = query.get('discord') ?? '';
+  const wanted = { telegram: TELEGRAM_NAME.test(telegram) ? telegram : undefined, discord: DISCORD_CODE.test(discord) ? discord : undefined };
+  const fresh = (wanted.telegram && telegramCounts.get(wanted.telegram.toLowerCase()) === undefined) || (wanted.discord && discordCounts.get(wanted.discord) === undefined);
+  if (fresh) {
+    const wait = socialsLimit.take(client);
+    if (wait > 0) return tooMany(wait);
+  }
+  const [tg, dc] = await Promise.all([
+    wanted.telegram ? cached(telegramCounts, wanted.telegram.toLowerCase(), () => telegramCount(wanted.telegram!)) : undefined,
+    wanted.discord ? cached(discordCounts, wanted.discord, () => discordCount(wanted.discord!)) : undefined,
+  ]);
+  const body: ChatCounts = {};
+  if (tg) body.telegram = tg;
+  if (dc) body.discord = dc;
+  return { status: 200, body };
+}
+

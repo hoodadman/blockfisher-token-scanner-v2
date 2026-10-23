@@ -20,6 +20,7 @@ import { scoreFoundation, type FoundationReport } from '../foundation';
 import type { TokenSignals } from '../scoring';
 import { apiHosts } from './hosts';
 import { SHARE_HEADER, savedAt, shareSeconds } from './share';
+import { chatLinksFromDexScreener, fetchChatCounts } from './chats';
 import { communityFromBundle, fetchTwitterBundle, TwitterError } from './twitter';
 
 export interface Chain {
@@ -194,11 +195,12 @@ export async function lookupToken(
   const holderShare: { seconds: number; at?: number } = { seconds: shareSeconds('holders', launchedAt, fresh) };
 
   // GoPlus runs on every scan: security is what changes fastest when a token is rugged.
-  const [scan, holders, twitterBundle, gecko] = await Promise.allSettled([
+  const [scan, holders, twitterBundle, gecko, chats] = await Promise.allSettled([
     fetchGoPlus(chain, address, signal),
     getJson<InsightXDexMetrics>(`${apiHosts().insightx}/dex-metrics/v1/${chain.network}/${address}`, signal, holderShare),
     fetchTwitterBundle({ handle: twitter, name: identity.name, symbol: identity.symbol }, signal, shareSeconds('community', launchedAt, fresh)),
     prefetched.coingecko ? Promise.resolve(prefetched.coingecko) : getJson<CoinGeckoCoin>(coingeckoContractUrl(chain.network, address), signal),
+    fetchChatCounts(chatLinksFromDexScreener(pairs), signal),
   ]);
   signal?.throwIfAborted();
 
@@ -220,7 +222,10 @@ export async function lookupToken(
     ...identity,
     twitter,
     signals,
-    community: bundle ? communityFromBundle(bundle) : scoreCommunity({}),
+    community: (() => {
+      const counts = chats.status === 'fulfilled' ? chats.value : {};
+      return bundle ? communityFromBundle(bundle, counts) : scoreCommunity({ telegram: counts.telegram, discord: counts.discord });
+    })(),
     foundation: scoreFoundation({
       launchedAt: signals.launchedAt,
       websites: websitesFromDexScreener(pairs),

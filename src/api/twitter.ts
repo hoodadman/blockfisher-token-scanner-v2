@@ -1,7 +1,17 @@
 import { MIN_FOLLOWERS, scoreCommunity, type CommunityReport, type MentionInput } from '../community';
 import type { NamedBacker } from '../foundation';
+import type { ChatCounts } from './chats';
 import { apiHosts } from './hosts';
 import { SHARE_HEADER, savedAt } from './share';
+
+/**
+ * X charges per post ($0.005) and per account ($0.010) returned, so read only what moves
+ * the score: a recent sample of mentions plus X's count of all of them ($0.005 a call),
+ * the account's last 15 posts, and at most 5 accounts named in its bio.
+ */
+const MENTION_SAMPLE = 10;
+const OWN_POSTS = 15;
+const BIO_PEOPLE = 5;
 
 /** Two rounds of calls run one after the other, so keep each short. */
 const TIMEOUT_MS = 10_000;
@@ -54,6 +64,8 @@ export interface TwitterBundle {
   tweets: Array<{ likes: number; replies: number; reposts: number }>;
   mentionedPeople: NamedBacker[];
   mentions: MentionInput[];
+  /** All mentions in the last 7 days, from X's count; undefined when the count failed. */
+  mentionTotal?: number;
 }
 
 class TwitterError extends Error {
@@ -138,7 +150,7 @@ async function fetchProfile(handle: string, signal?: AbortSignal, share?: Share)
 async function fetchTweets(userId: string, signal?: AbortSignal, share?: Share) {
   try {
     const page = await getJson<TwitterPage<TwitterTweet>>(
-      `/2/users/${userId}/tweets?max_results=20&exclude=retweets,replies&tweet.fields=public_metrics`,
+      `/2/users/${userId}/tweets?max_results=${OWN_POSTS}&exclude=retweets,replies&tweet.fields=public_metrics`,
       signal,
       share,
     );
@@ -150,7 +162,7 @@ async function fetchTweets(userId: string, signal?: AbortSignal, share?: Share) 
 }
 
 async function lookupPeople(usernames: readonly string[], signal?: AbortSignal, share?: Share): Promise<NamedBacker[]> {
-  const unique = [...new Set(usernames)].slice(0, 20);
+  const unique = [...new Set(usernames)].slice(0, BIO_PEOPLE);
   if (unique.length === 0) return [];
   try {
     const body = await getJson<{ data?: TwitterUser[] }>(
@@ -171,7 +183,7 @@ async function lookupPeople(usernames: readonly string[], signal?: AbortSignal, 
 async function fetchMentions(query: string, signal?: AbortSignal, share?: Share): Promise<MentionInput[]> {
   const path =
     `/2/tweets/search/recent?query=${encodeURIComponent(query)}` +
-    '&max_results=50&tweet.fields=public_metrics,author_id&expansions=author_id&user.fields=public_metrics';
+    `&max_results=${MENTION_SAMPLE}&tweet.fields=public_metrics,author_id&expansions=author_id&user.fields=public_metrics`;
   const page = await getJson<TwitterPage<TwitterTweet>>(path, signal, share);
   const authors = new Map((page.includes?.users ?? []).map((user) => [user.id, user]));
   return (page.data ?? []).map((tweet) => {
@@ -183,6 +195,21 @@ async function fetchMentions(query: string, signal?: AbortSignal, share?: Share)
   });
 }
 
+/** How many posts mentioned the token in the last 7 days. One flat-priced call. */
+async function fetchMentionTotal(query: string, signal?: AbortSignal, share?: Share): Promise<number | undefined> {
+  try {
+    const body = await getJson<{ meta?: { total_tweet_count?: number } }>(
+      `/2/tweets/counts/recent?query=${encodeURIComponent(query)}&granularity=day`,
+      signal,
+      share,
+    );
+    return typeof body.meta?.total_tweet_count === 'number' ? body.meta.total_tweet_count : undefined;
+  } catch (error) {
+    if (error instanceof TwitterError) return undefined;
+    throw error;
+  }
+}
+
 export async function fetchTwitterBundle(
   input: { handle?: string; name?: string; symbol?: string },
   signal?: AbortSignal,
@@ -190,9 +217,10 @@ export async function fetchTwitterBundle(
 ): Promise<TwitterBundle> {
   const share: Share = { seconds: shareSeconds };
   const query = searchQuery(input.symbol, input.name, input.handle);
-  const [profileResult, mentionResult] = await Promise.allSettled([
+  const [profileResult, mentionResult, totalResult] = await Promise.allSettled([
     input.handle ? fetchProfile(input.handle, signal, share) : Promise.resolve(undefined),
     query ? fetchMentions(query, signal, share) : Promise.resolve([]),
+    query ? fetchMentionTotal(query, signal, share) : Promise.resolve(undefined),
   ]);
   if (profileResult.status === 'rejected' && mentionResult.status === 'rejected') {
     throw profileResult.reason;
@@ -208,15 +236,19 @@ export async function fetchTwitterBundle(
     tweets,
     mentionedPeople,
     mentions: mentionResult.status === 'fulfilled' ? mentionResult.value : [],
+    mentionTotal: totalResult.status === 'fulfilled' ? totalResult.value : undefined,
   };
 }
 
-export function communityFromBundle(bundle: TwitterBundle): CommunityReport {
+export function communityFromBundle(bundle: TwitterBundle, chats: ChatCounts = {}): CommunityReport {
   return scoreCommunity({
+    telegram: chats.telegram,
+    discord: chats.discord,
     official: bundle.profile
       ? { handle: bundle.profile.handle, name: bundle.profile.name, followers: bundle.profile.followers, tweets: bundle.tweets }
       : undefined,
     mentions: bundle.mentions,
+    mentionTotal: bundle.mentionTotal,
   });
 }
 

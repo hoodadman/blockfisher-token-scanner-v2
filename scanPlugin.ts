@@ -82,6 +82,7 @@ export function scanPlugin(): Plugin {
       twitter: `${origin}/api/twitter`,
       coingecko: `${origin}/api/coingecko`,
       summarise: `${origin}/api/summarise`,
+      socials: `${origin}/api/socials`,
     };
     try {
       const loaded = (await server.ssrLoadModule('/src/api/scan.ts')) as { runScan(input: string, hosts: ApiHosts): Promise<ScanResult> };
