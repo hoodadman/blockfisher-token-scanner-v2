@@ -23,6 +23,8 @@ export interface CommunityInput {
     tweets: ReadonlyArray<{ likes: number; replies: number; reposts: number }>;
   };
   mentions?: readonly MentionInput[];
+  /** All mentions in the last 7 days (X's count), when only a sample was read. */
+  mentionTotal?: number;
 }
 
 function clamp(value: number, max: number) {
@@ -64,6 +66,19 @@ export function mentionWeight(mention: MentionInput) {
   return size * buzz;
 }
 
+/**
+ * Mention points were tuned on the 50 most recent mentions. We now read a smaller recent
+ * sample and X's count of all mentions, so scale the sample up to what 50 (or fewer, when
+ * there were fewer) would have weighed. Busy tokens hit the 30-point cap either way.
+ */
+export const MENTION_SCALE_TO = 50;
+
+export function scaledWeights(weights: readonly number[], sampled: number, total: number | undefined): number[] {
+  if (total === undefined || sampled === 0) return [...weights];
+  const factor = Math.max(1, Math.min(total, MENTION_SCALE_TO) / sampled);
+  return weights.map((weight) => weight * factor);
+}
+
 export function mentionPoints(weights: readonly number[]) {
   const total = weights.reduce((sum, value) => sum + value, 0);
   return clamp(Math.log10(1 + total) * 14, 30);
@@ -71,7 +86,7 @@ export function mentionPoints(weights: readonly number[]) {
 
 export function scoreCommunity(input: CommunityInput): CommunityReport {
   const official = summariseOfficial(input.official);
-  const mentions = summariseMentions(input.mentions ?? []);
+  const mentions = summariseMentions(input.mentions ?? [], input.mentionTotal);
 
   const fromPage = official
     ? followerPoints(official.followers) +
@@ -79,8 +94,9 @@ export function scoreCommunity(input: CommunityInput): CommunityReport {
       likePoints(official.averageLikes) +
       repostPoints(official.averageReposts)
     : 0;
+  const sample = input.mentions ?? [];
   const fromMentions = mentionPoints(
-    (input.mentions ?? []).map(mentionWeight).filter((weight) => weight > 0),
+    scaledWeights(sample.map(mentionWeight).filter((weight) => weight > 0), sample.length, input.mentionTotal),
   );
 
   // Without an official page, mentions can only show a weak signal.
@@ -106,7 +122,7 @@ function summariseOfficial(page: CommunityInput['official']): OfficialPage | und
   };
 }
 
-function summariseMentions(mentions: readonly MentionInput[]): MentionSummary {
+function summariseMentions(mentions: readonly MentionInput[], total?: number): MentionSummary {
   let counted = 0;
   let ignoredBots = 0;
   let weightedReach = 0;
@@ -118,5 +134,5 @@ function summariseMentions(mentions: readonly MentionInput[]): MentionSummary {
       weightedReach += weight;
     }
   }
-  return { counted, ignoredBots, weightedReach };
+  return total === undefined ? { counted, ignoredBots, weightedReach } : { counted, ignoredBots, weightedReach, total };
 }

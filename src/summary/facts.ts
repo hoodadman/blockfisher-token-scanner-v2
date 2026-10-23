@@ -27,7 +27,7 @@ export function summaryFacts(input: {
       handle: input.community?.official?.handle,
       followers: input.community?.official?.followers,
       replies: input.community?.official?.averageReplies,
-      otherPosts: input.community?.mentions.counted,
+      otherPosts: input.community?.mentions.total ?? input.community?.mentions.counted,
     },
     foundation: {
       score: input.foundation.score,

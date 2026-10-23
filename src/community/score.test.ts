@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { MIN_FOLLOWERS, mentionWeight, scoreCommunity } from './score';
+import { MIN_FOLLOWERS, mentionWeight, scaledWeights, scoreCommunity } from './score';
 
 describe('scoreCommunity', () => {
   it('scores a busy official page more for replies than for likes', () => {
@@ -40,3 +40,24 @@ describe('scoreCommunity', () => {
     expect(scoreCommunity({})).toMatchObject({ score: null, band: null, mentions: { counted: 0, ignoredBots: 0 } });
   });
 });
+
+describe('mention sample', () => {
+  it('scales a recent sample up to what the 50 most recent would have weighed', () => {
+    expect(scaledWeights([2, 4], 15, 300)).toEqual([2 * 50 / 15, 4 * 50 / 15]);
+    expect(scaledWeights([2, 4], 15, 30)).toEqual([4, 8]);
+    // Fewer mentions than the sample, or no count: as read.
+    expect(scaledWeights([2, 4], 15, 9)).toEqual([2, 4]);
+    expect(scaledWeights([2, 4], 15, undefined)).toEqual([2, 4]);
+  });
+
+  it('scores a sample with the count about the same as all 50 posts', () => {
+    const mention = (i: number) => ({ followers: 500 + i * 300, likes: i % 7, replies: i % 3, reposts: i % 2 });
+    const all = Array.from({ length: 50 }, (_, i) => mention(i));
+    const shuffled = [...all].sort((a, b) => ((a.followers * 7919) % 50) - ((b.followers * 7919) % 50));
+    const full = scoreCommunity({ mentions: all.slice(0, 10) }).score!;
+    const sampled = scoreCommunity({ mentions: shuffled.slice(0, 3), mentionTotal: 10 }).score!;
+    expect(Math.abs(full - sampled)).toBeLessThanOrEqual(3);
+    expect(scoreCommunity({ mentions: shuffled.slice(0, 15), mentionTotal: 400 }).mentions).toMatchObject({ counted: 15, total: 400 });
+  });
+});
+

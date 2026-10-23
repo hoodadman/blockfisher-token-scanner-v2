@@ -112,7 +112,9 @@ export function CommunityScore({ report, defaultOpen = false }: { report: Commun
           <p className="cs-block__lead">
             {mentions.counted === 0
               ? 'No recent posts from real accounts.'
-              : `${mentions.counted} recent ${mentions.counted === 1 ? 'post' : 'posts'} from other accounts.`}
+              : mentions.total !== undefined
+                ? `${mentions.total} ${mentions.total === 1 ? 'post' : 'posts'} in the last 7 days. We looked closely at the ${mentions.counted} most recent from real accounts.`
+                : `${mentions.counted} recent ${mentions.counted === 1 ? 'post' : 'posts'} from other accounts.`}
           </p>
           <p className="cs-note">
             Larger accounts count for more. Accounts with fewer than 10 followers are treated as bots and ignored

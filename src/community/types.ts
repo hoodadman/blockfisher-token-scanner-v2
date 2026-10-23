@@ -11,9 +11,12 @@ export interface OfficialPage {
 }
 
 export interface MentionSummary {
+  /** Posts from real accounts in the sample we read. */
   counted: number;
   ignoredBots: number;
   weightedReach: number;
+  /** All posts mentioning the token in the last 7 days, from X's count, when we have it. */
+  total?: number;
 }
 
 export interface CommunityReport {
