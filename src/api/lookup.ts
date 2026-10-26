@@ -21,10 +21,10 @@ import type { TokenSignals } from '../scoring';
 import { apiHosts } from './hosts';
 import { SHARE_HEADER, savedAt, shareSeconds } from './share';
 import { chatLinksFromDexScreener, fetchChatCounts } from './chats';
-import { communityFromBundle, expandTwitterBundle, fetchTwitterBundle, TwitterError, type TwitterBundle } from './twitter';
+import { BASIC_CHECK_MAX_COST, communityFromBundle, expandTwitterBundle, fetchBasicBundle, fetchTwitterBundle, TwitterError, type TwitterBundle } from './twitter';
 import { fetchSecondOpinion, worseOf, type SecondOpinion } from './secondOpinion';
 import { choose, readLibrary, writeLibrary } from '../plans/library';
-import { PLANS, type Depth, type Plan } from '../plans/plans';
+import { PLANS, type Plan, type Source } from '../plans/plans';
 
 export interface Chain {
   name: string;
@@ -102,9 +102,9 @@ export interface TokenLookup {
    * Where Community came from: fetched (fresh or a shared answer), the library, a saved
    * Pro result read on to Ultra depth ('expanded'), or nowhere ('skipped').
    */
-  communitySource: 'fetched' | 'library' | 'expanded' | 'skipped';
-  /** The depth of the X data behind Community. */
-  communityFrom?: Depth;
+  communitySource: 'fetched' | 'library' | 'expanded' | 'basic' | 'skipped';
+  /** The X data behind Community: a full check at either depth, or a basic one. */
+  communityFrom?: Source;
   /** Ultra's second-opinion security checks, when they ran. */
   secondOpinion?: SecondOpinion;
 }
@@ -115,10 +115,12 @@ export interface LookupOptions {
   /** Read and write the scan library (server only; see plans/library.ts). */
   library?: boolean;
   /**
-   * Asked before a Free scan fetches Community because the library has nothing for the
-   * token: true spends one of the client's free new tokens, false skips Community.
+   * Asked before a basic check (Free, token nobody has scanned) with its most it can cost:
+   * true goes ahead, false skips Community. The scan then calls `spent` with what it cost.
+   * Without it, basic checks always run (the browser and tests).
    */
-  mayFetchCommunity?: () => boolean;
+  mayCheckBasic?: (maxCost: number) => Promise<boolean>;
+  spent?: (cost: number) => void;
 }
 
 class HttpError extends Error {
@@ -227,7 +229,7 @@ export async function lookupToken(
   const choice = choose(plan, shelf, communityAge);
   const who = { handle: twitter, name: identity.name, symbol: identity.symbol };
   let communitySource: TokenLookup['communitySource'];
-  let communityFrom: Depth | undefined;
+  let communityFrom: Source | undefined;
   let communityWork: Promise<TwitterBundle | undefined>;
   if ('use' in choice) {
     communitySource = 'library';
@@ -243,9 +245,23 @@ export async function lookupToken(
       communityFrom = 'pro';
       return base;
     });
-  } else if (plan.community === 'library' && options.mayFetchCommunity && !options.mayFetchCommunity()) {
-    communitySource = 'skipped';
-    communityWork = Promise.resolve(undefined);
+  } else if (plan.whenUnscanned === 'basic') {
+    // Free on a token nobody has scanned: a basic check, if today's limits allow.
+    const allowed = options.mayCheckBasic ? await options.mayCheckBasic(BASIC_CHECK_MAX_COST) : true;
+    communitySource = allowed ? 'basic' : 'skipped';
+    communityFrom = allowed ? 'basic' : undefined;
+    communityWork = allowed
+      ? fetchBasicBundle(who, signal, communityAge).then(
+          ({ bundle, cost }) => {
+            options.spent?.(cost);
+            return bundle;
+          },
+          (error: unknown) => {
+            options.spent?.(0);
+            throw error;
+          },
+        )
+      : Promise.resolve(undefined);
   } else {
     communitySource = 'fetched';
     communityFrom = plan.depth;
@@ -277,8 +293,9 @@ export async function lookupToken(
   const signals = secondOpinion ? worseOf(firstOpinion, secondOpinion.signals) : firstOpinion;
   const bundle = twitterBundle.status === 'fulfilled' ? twitterBundle.value : undefined;
   // Whatever this scan paid for goes back in the library for everyone else.
-  if (bundle && (communitySource === 'fetched' || communitySource === 'expanded') && options.library) {
-    await writeLibrary(chain.network, address, plan.depth, { savedAt: bundle.checkedAt ?? Date.now(), plan: plan.id, bundle });
+  if (bundle && communitySource !== 'library' && communitySource !== 'skipped' && options.library) {
+    const shelf = communitySource === 'basic' ? 'basic' : plan.depth;
+    await writeLibrary(chain.network, address, shelf, { savedAt: bundle.checkedAt ?? Date.now(), plan: plan.id, bundle });
   }
 
   return {

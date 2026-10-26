@@ -33,6 +33,19 @@ export interface CommunityInput {
   mentionTotal?: number;
   telegram?: ChatInput;
   discord?: ChatInput;
+  /**
+   * A basic check (Free): one post and a mention count, no sample of who is talking. Scored
+   * cautiously: mentions earn at most half, and the whole score at most BASIC_MAX.
+   */
+  basic?: boolean;
+}
+
+/** A basic check can't tell a real crowd from a bought one, so it never scores as active. */
+export const BASIC_MAX = 65;
+
+/** Mention points from X's count alone, without knowing who posted: up to half the full 30. */
+export function countPoints(total: number) {
+  return clamp(Math.log10(1 + total) * 6, 15);
 }
 
 function clamp(value: number, max: number) {
@@ -120,9 +133,10 @@ export function scoreCommunity(input: CommunityInput): CommunityReport {
       repostPoints(official.averageReposts)
     : 0;
   const sample = input.mentions ?? [];
-  const fromMentions = mentionPoints(
-    scaledWeights(sample.map(mentionWeight).filter((weight) => weight > 0), sample.length, input.mentionTotal),
-  );
+  const fromMentions =
+    input.basic && sample.length === 0
+      ? countPoints(input.mentionTotal ?? 0)
+      : mentionPoints(scaledWeights(sample.map(mentionWeight).filter((weight) => weight > 0), sample.length, input.mentionTotal));
 
   const telegram = chatSummary(input.telegram);
   const discord = chatSummary(input.discord);
@@ -130,11 +144,12 @@ export function scoreCommunity(input: CommunityInput): CommunityReport {
 
   // Without an official page, mentions and chats can only show a weak signal.
   const raw = official ? fromPage + fromMentions + fromChats : Math.min(40, fromMentions + fromChats);
-  const hasAnything = Boolean(official) || mentions.counted > 0 || Boolean(telegram) || Boolean(discord);
-  const score = hasAnything ? Math.round(clamp(raw, 100)) : null;
+  const hasAnything =
+    Boolean(official) || mentions.counted > 0 || Boolean(telegram) || Boolean(discord) || Boolean(input.basic && input.mentionTotal);
+  const score = hasAnything ? Math.round(clamp(raw, input.basic ? BASIC_MAX : 100)) : null;
   const band = score === null ? null : (ACTIVITY_BANDS.find(({ min }) => score >= min)?.band ?? 'quiet');
 
-  return { score, band, official, mentions, ...(telegram && { telegram }), ...(discord && { discord }) };
+  return { score, band, official, mentions, ...(telegram && { telegram }), ...(discord && { discord }), ...(input.basic && { basic: true }) };
 }
 
 function summariseOfficial(page: CommunityInput['official']): OfficialPage | undefined {

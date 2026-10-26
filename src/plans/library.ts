@@ -1,6 +1,6 @@
 import type { InsightXNetwork } from '../adapters';
 import type { TwitterBundle } from '../api/twitter';
-import type { Depth, Plan, PlanId } from './plans';
+import type { Plan, PlanId, Source } from './plans';
 
 /**
  * The scan library: the latest X answers for every token anyone has scanned, kept for
@@ -57,11 +57,15 @@ export function libraryKind(): string {
   return store.kind;
 }
 
-const keyOf = (network: InsightXNetwork, address: string, depth: Depth) => `${network}:${address.toLowerCase()}:${depth}`;
+export function libraryStore(): LibraryStore {
+  return store;
+}
 
-export type Shelf = Partial<Record<Depth, LibraryEntry>>;
+const keyOf = (network: InsightXNetwork, address: string, depth: Source) => `${network}:${address.toLowerCase()}:${depth}`;
 
-async function readOne(network: InsightXNetwork, address: string, depth: Depth): Promise<LibraryEntry | undefined> {
+export type Shelf = Partial<Record<Source, LibraryEntry>>;
+
+async function readOne(network: InsightXNetwork, address: string, depth: Source): Promise<LibraryEntry | undefined> {
   try {
     const raw = await store.get(keyOf(network, address, depth));
     if (!raw) return undefined;
@@ -73,14 +77,14 @@ async function readOne(network: InsightXNetwork, address: string, depth: Depth):
   }
 }
 
-/** The saved entries at each depth; missing when there is none or the store failed. */
+/** The saved entries from each source; missing when there is none or the store failed. */
 export async function readLibrary(network: InsightXNetwork, address: string): Promise<Shelf> {
-  const [pro, ultra] = await Promise.all([readOne(network, address, 'pro'), readOne(network, address, 'ultra')]);
-  return { ...(pro && { pro }), ...(ultra && { ultra }) };
+  const [pro, ultra, basic] = await Promise.all((['pro', 'ultra', 'basic'] as const).map((source) => readOne(network, address, source)));
+  return { ...(pro && { pro }), ...(ultra && { ultra }), ...(basic && { basic }) };
 }
 
 /** Saves answers at their depth unless the library already holds newer ones. A store failure never fails a scan. */
-export async function writeLibrary(network: InsightXNetwork, address: string, depth: Depth, entry: LibraryEntry): Promise<void> {
+export async function writeLibrary(network: InsightXNetwork, address: string, depth: Source, entry: LibraryEntry): Promise<void> {
   try {
     const current = await readOne(network, address, depth);
     if (current && current.savedAt > entry.savedAt) return;
@@ -98,13 +102,14 @@ export const ULTRA_PREFERRED_MS = 7 * 24 * 60 * 60_000;
 
 /** What a scan does for Community, given what the library holds. */
 export type Choice =
-  | { use: LibraryEntry; from: Depth }
+  | { use: LibraryEntry; from: Source }
   | { expand: LibraryEntry }
   | { fetch: true };
 
 /**
  * The trickle-down rules.
- * - Free: the saved Ultra result, else Pro, whatever its age (Ultra unless Pro is a week newer).
+ * - Free: the saved Ultra result, else Pro, whatever its age (Ultra unless Pro is a week
+ *   newer); else an earlier basic check. Pro and Ultra never use a basic check.
  * - Pro: a saved Ultra or Pro result no older than `maxAgeSeconds`, Ultra first.
  * - Ultra: a saved Ultra result no older than `maxAgeSeconds`; else read on from a Pro
  *   result that young instead of starting again.
@@ -115,6 +120,7 @@ export function choose(plan: Plan, shelf: Shelf, maxAgeSeconds: number, now = Da
   if (plan.community === 'library') {
     if (ultra && (!pro || pro.savedAt - ultra.savedAt <= ULTRA_PREFERRED_MS)) return { use: ultra, from: 'ultra' };
     if (pro) return { use: pro, from: 'pro' };
+    if (shelf.basic) return { use: shelf.basic, from: 'basic' };
     return { fetch: true };
   }
   const young = (entry?: LibraryEntry): entry is LibraryEntry => entry !== undefined && maxAgeSeconds > 0 && now - entry.savedAt <= maxAgeSeconds * 1000;

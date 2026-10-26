@@ -9,7 +9,8 @@ import { identify, parseCandidates, type IdentifiedToken } from '../api/identify
 import { LookupError, isTokenAddress, type LookupOptions, type Prefetched } from '../api/lookup';
 import { scanErrorText, scanReport, scanText, type ScanReport } from '../api/scan';
 import { parsePrefetched } from './prefetched';
-import { libraryKind, setLibraryStore, type LibraryStore } from '../plans/library';
+import { DailyBudget } from '../plans/budget';
+import { libraryKind, libraryStore, setLibraryStore, type LibraryStore } from '../plans/library';
 import { PLANS, atProDepth, planFrom, type Plan, type PlanId } from '../plans/plans';
 
 export interface ApiReply {
@@ -89,7 +90,7 @@ const scanLimit = new RateLimiter(30, 10 * 60_000);
 // A re-check skips every shared answer, so it costs the most; each plan allows a few.
 const refreshLimits = new Map<PlanId, RateLimiter>();
 const DAY_MS = 24 * 60 * 60_000;
-// Free: new tokens a day (library misses). Ultra: deep scans a day. Per client, until accounts exist.
+// Free: basic checks a day. Ultra: deep scans a day. Per client, until accounts exist.
 const dailyLimits = new Map<PlanId, RateLimiter>();
 const identifyLimit = new RateLimiter(120, 10 * 60_000);
 
@@ -102,6 +103,10 @@ function limiter(limits: Map<PlanId, RateLimiter>, plan: Plan, max: number, wind
   return found;
 }
 
+/** Default shared daily cap, in dollars, on Free's basic community checks (FREE_COMMUNITY_BUDGET). */
+export const FREE_COMMUNITY_BUDGET = 10;
+let freeBudget = new DailyBudget(FREE_COMMUNITY_BUDGET, libraryStore);
+
 /**
  * 'open' (the mock Scanner Pro): each request says its plan and gets it.
  * 'off': every request runs as Free, whatever it asks for.
@@ -109,20 +114,32 @@ function limiter(limits: Map<PlanId, RateLimiter>, plan: Plan, max: number, wind
 export type PaidPlans = 'open' | 'off';
 let paidPlans: PaidPlans = 'open';
 
-export function configure(hosts: ApiHosts, options: { library?: LibraryStore; paidPlans?: PaidPlans } = {}): void {
+export function configure(
+  hosts: ApiHosts,
+  options: { library?: LibraryStore; paidPlans?: PaidPlans; freeBudget?: number } = {},
+): void {
   setApiHosts(hosts);
   if (options.library) setLibraryStore(options.library);
   if (options.paidPlans) paidPlans = options.paidPlans;
+  if (options.freeBudget !== undefined && options.freeBudget !== freeBudget.dollars) {
+    freeBudget = new DailyBudget(options.freeBudget, libraryStore);
+  }
+}
+
+/** Dollars spent today on Free's basic community checks, and the cap; for /api/health. */
+export async function freeBudgetToday(): Promise<{ spent: number; cap: number }> {
+  return { spent: Math.round((await freeBudget.spentToday()) * 1000) / 1000, cap: freeBudget.dollars };
 }
 
 export function libraryStoreKind(): string {
   return libraryKind();
 }
 
-/** Resets the limits; for tests. */
-export function resetLimits(): void {
+/** Resets the limits and today's budget; for tests. */
+export function resetLimits(budget = FREE_COMMUNITY_BUDGET): void {
   refreshLimits.clear();
   dailyLimits.clear();
+  freeBudget = new DailyBudget(budget, libraryStore);
 }
 
 const tooMany = (seconds: number): ApiReply => ({
@@ -164,11 +181,21 @@ export async function handleScan(body: unknown, client: string): Promise<ApiRepl
     runKey = `${key}|pro-depth`;
     notes.push(`Today’s ${PLANS.ultra.paidScansPerDay} deep scans are used up, so this one ran at Pro depth.`);
   }
-  const options: LookupOptions = {
-    plan,
-    library: true,
-    mayFetchCommunity: plan.id === 'free' && daily ? () => daily.take(client) === 0 : undefined,
-  };
+  const options: LookupOptions = { plan, library: true };
+  if (plan.whenUnscanned === 'basic' && daily) {
+    // Free's basic checks: within the shared daily budget, then the client's own allowance.
+    let reserved = 0;
+    options.mayCheckBasic = async (maxCost) => {
+      if (!(await freeBudget.reserve(maxCost))) return false;
+      if (daily.take(client) > 0) {
+        freeBudget.settle(maxCost, 0);
+        return false;
+      }
+      reserved = maxCost;
+      return true;
+    };
+    options.spent = (cost) => freeBudget.settle(reserved, cost);
+  }
   const work = runScan(runKey, address, network, prefetched, refresh, options, notes).finally(() => running.delete(key));
   running.set(key, work);
   return work;

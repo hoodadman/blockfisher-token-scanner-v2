@@ -11,8 +11,11 @@ export type PlanId = 'free' | 'pro' | 'ultra';
 
 export const PLAN_IDS: readonly PlanId[] = ['free', 'pro', 'ultra'];
 
-/** How deep a community check reads X: 'ultra' reads more than 'pro'. Free checks read at 'pro'. */
+/** How deep a community check reads X: 'ultra' reads more than 'pro'. */
 export type Depth = 'pro' | 'ultra';
+
+/** Where a saved community result came from: a full check at either depth, or Free's basic one. */
+export type Source = Depth | 'basic';
 
 /** How much of X a fresh community check reads. Each post costs $0.005, each account $0.010. */
 export interface XDepth {
@@ -44,6 +47,12 @@ export interface Plan {
   /** Oldest shared holder answer accepted, in seconds; undefined uses share.ts. */
   holdersMaxAge?: number;
   x: XDepth;
+  /**
+   * What a scan does for Community when the library has nothing for the token: a full
+   * check at `x`, or Free's basic one (followers, latest post, mention count; about $0.02),
+   * limited per user and by a shared daily budget (server/api.ts).
+   */
+  whenUnscanned: 'full' | 'basic';
   /** Which of the two depths `x` is; results are saved in the library under it. */
   depth: Depth;
   /** Second-opinion security checks (Honeypot.is on EVM, RugCheck on Solana). */
@@ -51,8 +60,8 @@ export interface Plan {
   /** Re-checks allowed per client in 10 minutes; 0 means no Re-check. */
   rechecks: number;
   /**
-   * Scans a client may make each day that cost us X calls. For Free, tokens with no saved
-   * result yet; for Ultra, deep scans (after that, Ultra scans run at Pro depth).
+   * Scans a client may make each day that cost us X calls. For Free, basic checks on
+   * tokens nobody has scanned; for Ultra, deep scans (after that, Pro depth).
    */
   paidScansPerDay?: number;
 }
@@ -70,10 +79,11 @@ export const PLANS: Readonly<Record<PlanId, Plan>> = {
       'Security checks run fresh on every scan',
       'Liquidity and market data are live',
       'Community from the latest saved scan, with its date',
-      '5 new tokens a day that nobody has scanned yet',
+      'A basic community check on 5 tokens a day that nobody has scanned yet',
     ],
     community: 'library',
     x: STANDARD_X,
+    whenUnscanned: 'basic',
     depth: 'pro',
     extraSecurity: false,
     rechecks: 0,
@@ -88,10 +98,11 @@ export const PLANS: Readonly<Record<PlanId, Plan>> = {
       'Everything in Free',
       'Community never more than a day old (12 hours for new tokens)',
       'Re-check any token for a fresh result',
-      'Unlimited new tokens',
+      'Community checked on tokens nobody has scanned yet',
     ],
     community: 'shared',
     x: STANDARD_X,
+    whenUnscanned: 'full',
     depth: 'pro',
     extraSecurity: false,
     rechecks: 5,
@@ -112,6 +123,7 @@ export const PLANS: Readonly<Record<PlanId, Plan>> = {
     communityMaxAge: 6 * 60 * 60,
     holdersMaxAge: 10 * 60,
     x: { mentions: 30, ownPosts: 30, bioPeople: 10 },
+    whenUnscanned: 'full',
     depth: 'ultra',
     extraSecurity: true,
     rechecks: 10,

@@ -180,10 +180,11 @@ function ago(at: number, now = Date.now()): string {
   return `${Math.round(hours / 24)} days ago`;
 }
 
-const SOURCE_TEXT: Record<ScanReport['communitySource'], (from?: 'pro' | 'ultra') => string> = {
+const SOURCE_TEXT: Record<ScanReport['communitySource'], (from?: ScanReport['communityFrom']) => string> = {
   fetched: () => '',
-  library: (from) => ` (from a saved ${from === 'ultra' ? 'Ultra' : 'Pro'} scan)`,
+  library: (from) => (from === 'basic' ? ' (a saved basic check)' : ` (from a saved ${from === 'ultra' ? 'Ultra' : 'Pro'} scan)`),
   expanded: () => ' (a recent Pro scan, read on to Ultra depth)',
+  basic: () => ' (basic check)',
   skipped: () => '',
 };
 

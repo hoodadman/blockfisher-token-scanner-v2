@@ -11,8 +11,9 @@ describe('planFrom', () => {
 });
 
 describe('the three plans', () => {
-  it('only Free reads Community from the library and has no Re-check', () => {
-    expect(PLANS.free).toMatchObject({ community: 'library', rechecks: 0 });
+  it('only Free reads Community from the library, runs basic checks on unscanned tokens and has no Re-check', () => {
+    expect(PLANS.free).toMatchObject({ community: 'library', rechecks: 0, whenUnscanned: 'basic', paidScansPerDay: 5 });
+    expect(PLANS.pro.whenUnscanned).toBe('full');
     expect(PLANS.pro).toMatchObject({ community: 'shared' });
     expect(PLANS.ultra).toMatchObject({ community: 'shared', extraSecurity: true });
   });

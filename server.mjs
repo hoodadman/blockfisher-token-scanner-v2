@@ -130,6 +130,8 @@ async function loadExtensionApi() {
         library: await libraryReady,
         // PAID_PLANS=off runs every scan as Free; anything else is the mock Scanner Pro.
         paidPlans: process.env.PAID_PLANS?.trim() === "off" ? "off" : "open",
+        // Dollars a day, shared by all Free users, for basic community checks. Security isn't capped.
+        freeBudget: Number(process.env.FREE_COMMUNITY_BUDGET) > 0 ? Number(process.env.FREE_COMMUNITY_BUDGET) : undefined,
       },
     );
     extensionApi = api;
@@ -164,6 +166,7 @@ async function health(res) {
   report.sharedStore = (await storeReady).kind;
   report.library = extensionApi ? extensionApi.libraryStoreKind() : "not loaded";
   report.paidPlans = process.env.PAID_PLANS?.trim() === "off" ? "off" : "open (mock)";
+  if (extensionApi) report.freeCommunityBudget = await extensionApi.freeBudgetToday();
   report.keys = {
     insightx: Boolean(process.env.INSIGHTX_API_KEY?.trim()),
     twitter: Boolean(process.env.TWITTER_BEARER_TOKEN?.trim()),
