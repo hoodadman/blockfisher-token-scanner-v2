@@ -250,16 +250,87 @@ describe('lookupToken on each plan', () => {
     expect(calls.some((url) => url.includes('/token_security/'))).toBe(true);
   });
 
-  it('Free never calls X: a token nobody has scanned gets Security only', async () => {
+  it('Free skips Community on a token nobody has scanned when today\'s limits say no, without calling X', async () => {
     const { PLANS } = await import('../plans/plans');
     const { setLibraryStore, memoryLibrary } = await import('../plans/library');
     setLibraryStore(memoryLibrary());
     const calls: string[] = [];
     vi.stubGlobal('fetch', routes(calls));
-    const free = await lookupToken(EVM, undefined, 'eth', {}, false, { plan: PLANS.free, library: true });
+    const free = await lookupToken(EVM, undefined, 'eth', {}, false, { plan: PLANS.free, library: true, mayCheckBasic: async () => false });
     expect(free.communitySource).toBe('skipped');
     expect(free.community).toBeUndefined();
     expect(calls.some((url) => url.includes('/api/twitter'))).toBe(false);
+    expect(calls.some((url) => url.includes('/token_security/'))).toBe(true);
+  });
+
+  it('Free runs a basic check on a token nobody has scanned, saves it for Free only, and scores it cautiously', async () => {
+    const { PLANS } = await import('../plans/plans');
+    const { setLibraryStore, memoryLibrary } = await import('../plans/library');
+    setLibraryStore(memoryLibrary());
+    const calls: string[] = [];
+    const spent: number[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        calls.push(url);
+        if (url.includes('/users/by/username/') && url.includes('expansions=most_recent_tweet_id')) {
+          return Response.json({
+            data: { id: '1', username: 'pepecoineth', public_metrics: { followers_count: 500_000 } },
+            includes: { tweets: [{ id: '9', public_metrics: { like_count: 5000, reply_count: 900, retweet_count: 800 } }] },
+          });
+        }
+        if (url.includes('counts/recent')) return Response.json({ meta: { total_tweet_count: 5000 } });
+        return routes([])(input);
+      }),
+    );
+
+    const free = await lookupToken(EVM, undefined, 'eth', {}, false, {
+      plan: PLANS.free,
+      library: true,
+      mayCheckBasic: async () => true,
+      spent: (cost) => spent.push(cost),
+    });
+    expect(free).toMatchObject({ communitySource: 'basic', communityFrom: 'basic', community: { basic: true, official: { followers: 500_000, tweetsLookedAt: 1 } } });
+    // A busy account would score higher on a full check; a basic one tops out at 65.
+    expect(free.community?.score).toBe(65);
+    expect(spent).toEqual([0.02]);
+    expect(calls.some((url) => url.includes('search/recent') || url.includes('/tweets?'))).toBe(false);
+
+    calls.length = 0;
+    const again = await lookupToken(EVM, undefined, 'eth', {}, false, { plan: PLANS.free, library: true, mayCheckBasic: async () => true });
+    expect(again).toMatchObject({ communitySource: 'library', communityFrom: 'basic' });
+    expect(calls.some((url) => url.includes('/api/twitter'))).toBe(false);
+
+    // Pro never takes a basic check as its own.
+    calls.length = 0;
+    const pro = await lookupToken(EVM, undefined, 'eth', {}, false, { plan: PLANS.pro, library: true });
+    expect(pro.communitySource).toBe('fetched');
+    expect(calls.some((url) => url.includes('search/recent'))).toBe(true);
+  });
+
+  it('a basic check asks for the account and then its posts when X refuses the latest-post field', async () => {
+    const { fetchBasicBundle } = await import('./twitter');
+    const calls: string[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        calls.push(url);
+        if (url.includes('expansions=most_recent_tweet_id')) return new Response(null, { status: 400 });
+        if (url.includes('/users/by/username/')) return Response.json({ data: { id: '1', username: 'pepecoineth', public_metrics: { followers_count: 50 } } });
+        if (url.includes('/users/1/tweets')) {
+          return Response.json({ data: [{ id: '3', public_metrics: { like_count: 7, reply_count: 2 } }, { id: '2', public_metrics: { like_count: 99 } }] });
+        }
+        if (url.includes('counts/recent')) return Response.json({ meta: { total_tweet_count: 12 } });
+        return new Response(null, { status: 404 });
+      }),
+    );
+    const { bundle, cost } = await fetchBasicBundle({ handle: 'pepecoineth', symbol: 'PEPE' });
+    expect(bundle.tweets).toEqual([{ likes: 7, replies: 2, reposts: 0 }]);
+    expect(bundle).toMatchObject({ basic: true, mentionTotal: 12, profile: { followers: 50 } });
+    expect(cost).toBeCloseTo(0.04, 3);
+    expect(calls.find((url) => url.includes('/users/1/tweets'))).toContain('max_results=5');
   });
 
   it('Ultra reads 30 mentions and adds a second opinion that can only make security worse', async () => {

@@ -121,3 +121,29 @@ describe('plans', () => {
     expect(last?.report.notes.join(' ')).toMatch(/Pro depth/);
   });
 });
+
+describe('Free basic checks', () => {
+  it('stop once the shared daily budget is spent, but Security still runs', async () => {
+    const { resetLimits } = await import('./api');
+    resetLimits(0.01);
+    const address = `0x${'f'.repeat(40)}`;
+    const calls: string[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        calls.push(String(input));
+        return new Response(null, { status: 404 });
+      }),
+    );
+    const reply = await handleScan(
+      { address, network: 'eth', plan: 'free', pairs: [{ chainId: 'ethereum', baseToken: { address }, liquidity: { usd: 1 }, info: { socials: [{ type: 'twitter', url: 'https://x.com/sometoken' }] } }] },
+      'free-client',
+    );
+    const body = reply.body as { report: { communitySource: string; notes: string[] } };
+    expect(body.report.communitySource).toBe('skipped');
+    expect(body.report.notes.join(' ')).toMatch(/free community checks are used up/);
+    expect(calls.some((url) => url.includes('/api/twitter') || url.includes('twitter.com'))).toBe(false);
+    expect(calls.some((url) => url.includes('gopluslabs'))).toBe(true);
+    resetLimits();
+  });
+});

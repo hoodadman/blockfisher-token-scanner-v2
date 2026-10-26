@@ -44,7 +44,7 @@ interface TwitterTweet {
 
 interface TwitterPage<T> {
   data?: T[];
-  includes?: { users?: TwitterUser[] };
+  includes?: { users?: TwitterUser[]; tweets?: TwitterTweet[] };
 }
 
 export interface TwitterProfile {
@@ -70,6 +70,8 @@ export interface TwitterBundle {
   read?: XDepth;
   /** The oldest post id read of each kind; a deeper scan asks X for posts before it. */
   oldest?: { mention?: string; post?: string };
+  /** A basic check (Free): followers, the latest post and the mention count only. */
+  basic?: boolean;
 }
 
 /** Posts come newest first, so the last one is the oldest. */
@@ -136,22 +138,23 @@ function searchQuery(symbol?: string, name?: string, handle?: string) {
   return `(${parts.join(' OR ')}) -is:retweet${exclude}`;
 }
 
-async function fetchProfile(handle: string, signal?: AbortSignal, share?: Share): Promise<TwitterProfile | undefined> {
-  const user = await getJson<{ data?: TwitterUser }>(
-    `/2/users/by/username/${encodeURIComponent(handle)}?user.fields=public_metrics,name,username,description,url,entities`,
-    signal,
-    share,
-  );
-  if (!user.data?.id) return undefined;
+const PROFILE_FIELDS = 'user.fields=public_metrics,name,username,description,url,entities';
+
+function profileFrom(user: TwitterUser, handle: string): TwitterProfile {
   return {
-    id: user.data.id,
-    handle: user.data.username ?? handle,
-    name: user.data.name,
-    followers: user.data.public_metrics?.followers_count ?? 0,
-    bio: user.data.description,
-    urls: urlsFrom(user.data),
-    mentions: mentionsFrom(user.data).filter((name) => name !== (user.data?.username ?? handle).toLowerCase()),
+    id: user.id,
+    handle: user.username ?? handle,
+    name: user.name,
+    followers: user.public_metrics?.followers_count ?? 0,
+    bio: user.description,
+    urls: urlsFrom(user),
+    mentions: mentionsFrom(user).filter((name) => name !== (user.username ?? handle).toLowerCase()),
   };
+}
+
+async function fetchProfile(handle: string, signal?: AbortSignal, share?: Share): Promise<TwitterProfile | undefined> {
+  const user = await getJson<{ data?: TwitterUser }>(`/2/users/by/username/${encodeURIComponent(handle)}?${PROFILE_FIELDS}`, signal, share);
+  return user.data?.id ? profileFrom(user.data, handle) : undefined;
 }
 
 async function fetchTweets(userId: string, count: number, signal?: AbortSignal, share?: Share, untilId?: string) {
@@ -299,6 +302,75 @@ export async function expandTwitterBundle(
   };
 }
 
+/**
+ * What a basic check costs at most, in dollars. Usually the account with its latest post
+ * ($0.015) and the mention count ($0.005): $0.02. If X won't send the latest post with
+ * the account: the account ($0.010), 5 posts ($0.025) and the count, $0.04.
+ */
+export const BASIC_CHECK_MAX_COST = 0.04;
+
+/**
+ * Free's basic community check: the account's followers, the likes and replies on its
+ * latest post, and how many posts mentioned the token in the last 7 days. About $0.02,
+ * against $0.29 for a full check. Answers are shared like any other (`shareSeconds`), so
+ * a recent full scan's profile and count cost nothing here. Returns what it cost at most.
+ */
+export async function fetchBasicBundle(
+  input: { handle?: string; name?: string; symbol?: string },
+  signal?: AbortSignal,
+  shareSeconds?: number,
+): Promise<{ bundle: TwitterBundle; cost: number }> {
+  const share: Share = { seconds: shareSeconds };
+  const query = searchQuery(input.symbol, input.name, input.handle);
+  let cost = 0;
+  const profileWork = (async () => {
+    if (!input.handle) return { profile: undefined, latest: [] as TwitterTweet[] };
+    const path = `/2/users/by/username/${encodeURIComponent(input.handle)}?${PROFILE_FIELDS}`;
+    try {
+      // X can send the latest post with the account: one call, $0.015.
+      const page = await getJson<{ data?: TwitterUser; includes?: { tweets?: TwitterTweet[] } }>(
+        `${path},most_recent_tweet_id&expansions=most_recent_tweet_id&tweet.fields=public_metrics`,
+        signal,
+        share,
+      );
+      cost += 0.015;
+      return { profile: page.data?.id ? profileFrom(page.data, input.handle) : undefined, latest: page.includes?.tweets ?? [] };
+    } catch (error) {
+      if (!(error instanceof TwitterError) || error.status !== 400) throw error;
+      // Older or newer API versions may refuse that field: ask for the account, then its posts.
+      const profile = await fetchProfile(input.handle, signal, share);
+      cost += 0.01;
+      if (!profile) return { profile, latest: [] };
+      const page = await getJson<TwitterPage<TwitterTweet>>(
+        `/2/users/${profile.id}/tweets?max_results=5&exclude=retweets,replies&tweet.fields=public_metrics`,
+        signal,
+        share,
+      ).catch(() => ({ data: [] }) as TwitterPage<TwitterTweet>);
+      cost += 0.025;
+      return { profile, latest: (page.data ?? []).slice(0, 1) };
+    }
+  })();
+  const [profileResult, totalResult] = await Promise.allSettled([
+    profileWork,
+    query ? fetchMentionTotal(query, signal, share).finally(() => (cost += 0.005)) : Promise.resolve(undefined),
+  ]);
+  if (profileResult.status === 'rejected' && (totalResult.status === 'rejected' || !query)) throw profileResult.reason;
+  const found = profileResult.status === 'fulfilled' ? profileResult.value : { profile: undefined, latest: [] };
+  return {
+    bundle: {
+      checkedAt: share.oldest,
+      profile: found.profile,
+      tweets: found.latest.slice(0, 1).map(tweetStats),
+      mentionedPeople: [],
+      mentions: [],
+      mentionTotal: totalResult.status === 'fulfilled' ? totalResult.value : undefined,
+      read: { mentions: 0, ownPosts: 1, bioPeople: 0 },
+      basic: true,
+    },
+    cost,
+  };
+}
+
 export function communityFromBundle(bundle: TwitterBundle, chats: ChatCounts = {}): CommunityReport {
   return scoreCommunity({
     telegram: chats.telegram,
@@ -308,6 +380,7 @@ export function communityFromBundle(bundle: TwitterBundle, chats: ChatCounts = {
       : undefined,
     mentions: bundle.mentions,
     mentionTotal: bundle.mentionTotal,
+    basic: bundle.basic,
   });
 }
 

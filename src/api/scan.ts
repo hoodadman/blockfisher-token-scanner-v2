@@ -8,7 +8,7 @@ import { summaryFacts } from '../summary/facts';
 import type { PillarBrief } from '../summary/types';
 import { LookupError, isTokenAddress, lookupToken, type LookupOptions, type Prefetched, type SourceFailure } from './lookup';
 import type { SecondOpinion } from './secondOpinion';
-import { PLANS, type Depth, type PlanId } from '../plans/plans';
+import { PLANS, type PlanId, type Source } from '../plans/plans';
 import { withApiHosts, type ApiHosts } from './hosts';
 
 export interface ScanResult {
@@ -41,9 +41,9 @@ export interface ScanReport {
   /** The scanner version that ran (plans.ts). */
   plan: PlanId;
   /** Where Community came from: fetched (fresh or shared), the library, a Pro result read on to Ultra depth, or skipped. */
-  communitySource: 'fetched' | 'library' | 'expanded' | 'skipped';
-  /** The depth of the X data behind Community: an Ultra result can serve Free and Pro. */
-  communityFrom?: Depth;
+  communitySource: 'fetched' | 'library' | 'expanded' | 'basic' | 'skipped';
+  /** The X data behind Community: an Ultra result can serve Free and Pro; 'basic' is Free's own check. */
+  communityFrom?: Source;
   /** Ultra's second-opinion security checks. */
   secondOpinion?: SecondOpinion;
   /** Plain-language notes about this result, for the card. */
@@ -53,10 +53,13 @@ export interface ScanReport {
 const DAY_MS = 24 * 60 * 60_000;
 
 /** What a user should know about where this result came from. */
-export function planNotes(report: Pick<ScanReport, 'plan' | 'communitySource' | 'checked'>, now = Date.now()): string[] {
+export function planNotes(report: Pick<ScanReport, 'plan' | 'communitySource' | 'communityFrom' | 'checked'>, now = Date.now()): string[] {
   const notes: string[] = [];
   if (report.communitySource === 'skipped') {
-    notes.push('Nobody has checked this token’s community yet, so this Free scan shows Security and Foundation only. Pro checks Community straight away.');
+    notes.push('Today’s free community checks are used up, so this Free scan shows Security and Foundation only. Pro checks Community straight away.');
+  }
+  if (report.communityFrom === 'basic') {
+    notes.push('Basic community check: followers, the latest post and how often the token was mentioned this week. Pro also reads who is talking about it.');
   }
   const at = report.checked.community;
   if (report.communitySource === 'library' && at !== undefined) {
@@ -115,7 +118,7 @@ export async function scanReport(
     communitySource: lookup.communitySource,
     communityFrom: lookup.communityFrom,
     secondOpinion: lookup.secondOpinion,
-    notes: planNotes({ plan: (options.plan ?? PLANS.pro).id, communitySource: lookup.communitySource, checked: lookup.checked }),
+    notes: planNotes({ plan: (options.plan ?? PLANS.pro).id, communitySource: lookup.communitySource, communityFrom: lookup.communityFrom, checked: lookup.checked }),
   };
 }
 

@@ -35,4 +35,6 @@ export interface CommunityReport {
   mentions: MentionSummary;
   telegram?: ChatSummary;
   discord?: ChatSummary;
+  /** A basic check (Free): followers, the latest post and the mention count only. */
+  basic?: boolean;
 }

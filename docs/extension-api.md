@@ -59,10 +59,10 @@ The three scanner versions are defined in one file, `src/plans/plans.ts`; nothin
 | Foundation | Live market data | Same | Same |
 | Community (X) | Best saved result (Ultra first), any age | Saved Ultra or Pro result up to 24 hours old (12 hours new tokens) | Saved Ultra up to 6 hours old, or a recent Pro read on to Ultra depth |
 | X read per fresh check | 10 mentions, 15 own posts, 5 bio accounts | Same | 30 mentions, 30 own posts, 10 bio accounts |
-| Worst-case X cost of a fresh check | $0 (never calls X) | $0.29 | $0.72 |
+| Worst-case X cost of a fresh check | $0.02 basic check ($0.04 at most), within a $10 a day cap for all Free users | $0.29 | $0.72 |
 | Re-check | No | 5 per 10 min | 10 per 10 min |
-| Tokens nobody has scanned yet | Security and Foundation only; Community not checked | Checked | Checked |
-| Daily limit | None | None | 20 deep scans, then Pro depth |
+| Tokens nobody has scanned yet | Basic community check: followers, the latest post's likes and replies, the 7-day mention count | Full check | Full check |
+| Daily limit | 5 basic checks per user, and the shared budget; after that Community is skipped | None | 20 deep scans, then Pro depth |
 
 Second-opinion findings can only make a result worse: each signal keeps the worse of the two readings.
 
@@ -70,9 +70,13 @@ Second-opinion findings can only make a result worse: each signal keeps the wors
 
 | Plan | Community comes from, in order |
 | --- | --- |
-| Free | Saved Ultra result (any age; unless the Pro one is over a week newer), saved Pro result, else nothing: Free never pays X |
+| Free | Saved Ultra result (any age; unless the Pro one is over a week newer), saved Pro result, saved basic check, else a new basic check |
 | Pro | Saved Ultra result within 24h (12h new tokens), saved Pro result within that, else a fresh check |
 | Ultra | Saved Ultra result within 6h; else a saved Pro result within 6h, read on to Ultra depth (only the older mentions and posts and the extra bio accounts Pro didn't read, about $0.43 instead of $0.72); else a fresh Ultra check |
+
+**Free's basic check** (`fetchBasicBundle` in `src/api/twitter.ts`) runs only on tokens with nothing saved. It reads the account (followers) with its latest post (likes, replies, reposts) in one call, plus X's 7-day mention count: $0.02, or $0.04 if X refuses the latest-post field and the scanner falls back to 5 posts. Telegram and Discord are added as usual. Without a sample of who is posting, mentions earn at most 15 points instead of 30 and the score is capped at 65, so a basic check never reads as "active". It is saved on its own shelf: Free users share it, Pro and Ultra never use it.
+
+**The Free budget** (`src/plans/budget.ts`) caps what all Free users together spend on basic checks: $10 a day by default (`FREE_COMMUNITY_BUDGET`), per UTC day. It covers Community only; Security runs on every scan. Each check holds $0.04 before it runs and gives back what it didn't cost. The running total is kept in the library's store, so a restart doesn't reset it. `/api/health` shows today's spend (`freeCommunityBudget`). $10 a day is about 500 basic checks.
 
 A Re-check skips the library. Every check that paid for X writes back at its depth, so results trickle down from Ultra to Pro to Free. The report says which (`communitySource`: `fetched`, `library`, `expanded` or `skipped`; `communityFrom`: `pro` or `ultra`). Only the server writes the library, from answers it fetched itself. It lives in Postgres when `DATABASE_URL` is set (table `scan_library`, created on start), else in the shared store's Redis with no expiry, else in memory. `/api/health` shows which (`library`).
 
@@ -96,6 +100,7 @@ The website shows a plan picker above the search box, saved in the browser, and 
 | `EXTENSION_ORIGINS` | Comma-separated `chrome-extension://<id>` origins allowed to call these endpoints. Set it to the published extension's id. When unset, any extension may call them (handy while testing an unpacked build). |
 | `INSIGHTX_API_KEY`, `TWITTER_BEARER_TOKEN`, `OPENAI_API_KEY` | Same keys the website already uses. The extension never sees them. |
 | `DATABASE_URL` | Postgres for the scan library (Render Postgres "Internal Database URL"). Optional; see Plans. |
+| `FREE_COMMUNITY_BUDGET` | Dollars a day, shared by all Free users, for basic community checks. Default 10. Security isn't capped. |
 | `PAID_PLANS` | `off` runs every scan as Free. Unset: each request picks its plan (the mock Scanner Pro). |
 | `REDIS_URL` | Where shared answers are kept: the Internal URL of a Render Key Value instance (`redis://red-…:6379`). Unset or unreachable, the server keeps them in memory instead, which works the same but empties on every restart or deploy. `/api/health` shows which (`sharedStore`). |
 
