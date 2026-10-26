@@ -97,3 +97,27 @@ describe('a repeated scan request', () => {
     expect(goPlusCalls).toHaveLength(1);
   });
 });
+
+describe('plans', () => {
+  it('turns down a Re-check on Free without calling anything', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    const reply = await handleScan({ address: '0x6982508145454Ce325dDbE47a25d4ec3d2311933', plan: 'free', refresh: true }, 'ip-free');
+    expect(reply.status).toBe(403);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('says which plan ran, and runs Ultra at Pro depth once its deep scans are used up', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(null, { status: 404 })));
+    let last: { report: { plan: string; notes: string[] } } | undefined;
+    for (let i = 1; i <= 21; i++) {
+      // A different token each time, so the result cache doesn't answer.
+      const address = `0x${i.toString(16).padStart(40, '0')}`;
+      const reply = await handleScan({ address, network: 'eth', plan: 'ultra', pairs: [{ chainId: 'ethereum', baseToken: { address }, liquidity: { usd: 1 } }] }, 'ultra-client');
+      last = reply.body as typeof last;
+      if (i === 1) expect(last?.report.notes).toEqual([]);
+    }
+    expect(last?.report.plan).toBe('ultra');
+    expect(last?.report.notes.join(' ')).toMatch(/Pro depth/);
+  });
+});

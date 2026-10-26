@@ -6,7 +6,9 @@ import { localBrief } from '../summary/local';
 import { fetchBrief } from '../summary/fetch';
 import { summaryFacts } from '../summary/facts';
 import type { PillarBrief } from '../summary/types';
-import { LookupError, isTokenAddress, lookupToken, type Prefetched, type SourceFailure } from './lookup';
+import { LookupError, isTokenAddress, lookupToken, type LookupOptions, type Prefetched, type SourceFailure } from './lookup';
+import type { SecondOpinion } from './secondOpinion';
+import { PLANS, type Depth, type PlanId } from '../plans/plans';
 import { withApiHosts, type ApiHosts } from './hosts';
 
 export interface ScanResult {
@@ -36,6 +38,32 @@ export interface ScanReport {
    * this scan fetched them itself without our server.
    */
   checked: { community?: number; holders?: number };
+  /** The scanner version that ran (plans.ts). */
+  plan: PlanId;
+  /** Where Community came from: fetched (fresh or shared), the library, a Pro result read on to Ultra depth, or skipped. */
+  communitySource: 'fetched' | 'library' | 'expanded' | 'skipped';
+  /** The depth of the X data behind Community: an Ultra result can serve Free and Pro. */
+  communityFrom?: Depth;
+  /** Ultra's second-opinion security checks. */
+  secondOpinion?: SecondOpinion;
+  /** Plain-language notes about this result, for the card. */
+  notes: string[];
+}
+
+const DAY_MS = 24 * 60 * 60_000;
+
+/** What a user should know about where this result came from. */
+export function planNotes(report: Pick<ScanReport, 'plan' | 'communitySource' | 'checked'>, now = Date.now()): string[] {
+  const notes: string[] = [];
+  if (report.communitySource === 'skipped') {
+    notes.push('Community wasn’t checked: nobody has scanned this token yet and today’s 5 free new tokens are used up. Pro checks it straight away.');
+  }
+  const at = report.checked.community;
+  if (report.communitySource === 'library' && at !== undefined) {
+    const days = Math.floor((now - at) / DAY_MS);
+    if (days >= 3) notes.push(`Community is from a saved scan ${days} days old. Pro checks it again.`);
+  }
+  return notes;
 }
 
 function mark(score: number | null): string {
@@ -49,8 +77,9 @@ export async function scanReport(
   signal?: AbortSignal,
   prefetched?: Prefetched,
   fresh = false,
+  options: LookupOptions = {},
 ): Promise<ScanReport> {
-  const lookup = await lookupToken(address, signal, network, prefetched, fresh);
+  const lookup = await lookupToken(address, signal, network, prefetched, fresh, options);
   const security = scoreToken(lookup.signals);
   const community = lookup.community?.score ?? null;
   const foundation = lookup.foundation.score;
@@ -82,6 +111,11 @@ export async function scanReport(
       brief.foundation !== fallback.foundation,
     failures: lookup.failures,
     checked: lookup.checked,
+    plan: (options.plan ?? PLANS.pro).id,
+    communitySource: lookup.communitySource,
+    communityFrom: lookup.communityFrom,
+    secondOpinion: lookup.secondOpinion,
+    notes: planNotes({ plan: (options.plan ?? PLANS.pro).id, communitySource: lookup.communitySource, checked: lookup.checked }),
   };
 }
 
@@ -100,6 +134,10 @@ export function scanText(report: ScanReport): string {
   if (report.failures.length > 0) {
     lines.push('', `Some checks did not run: ${report.failures.map((failure) => failure.source).join(', ')}.`);
   }
+  if (report.secondOpinion?.ok && report.secondOpinion.findings.length > 0) {
+    lines.push('', `${report.secondOpinion.source}: ${report.secondOpinion.findings.join(' ')}`);
+  }
+  if (report.notes.length > 0) lines.push('', ...report.notes);
   if (!report.briefFromModel) {
     lines.push('', 'Built-in summary. The language model did not answer.');
   }

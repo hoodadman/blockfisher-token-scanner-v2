@@ -7,7 +7,7 @@ import { readFile, stat } from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { openStore, sharedFetch } from "./shared-store.mjs";
+import { openLibrary, openStore, sharedFetch } from "./shared-store.mjs";
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const DIST = path.join(ROOT, "dist");
@@ -116,15 +116,23 @@ function clientOf(req) {
 let extensionApi;
 async function loadExtensionApi() {
   if (!extensionApi) {
-    extensionApi = await import("./dist-server/api.js");
+    const api = await import("./dist-server/api.js");
     const origin = `http://127.0.0.1:${PORT}`;
-    extensionApi.configure({
-      insightx: `${origin}/api/insightx`,
-      twitter: `${origin}/api/twitter`,
-      coingecko: `${origin}/api/coingecko`,
-      summarise: `${origin}/api/summarise`,
-      socials: `${origin}/api/socials`,
-    });
+    api.configure(
+      {
+        insightx: `${origin}/api/insightx`,
+        twitter: `${origin}/api/twitter`,
+        coingecko: `${origin}/api/coingecko`,
+        summarise: `${origin}/api/summarise`,
+        socials: `${origin}/api/socials`,
+      },
+      {
+        library: await libraryReady,
+        // PAID_PLANS=off runs every scan as Free; anything else is the mock Scanner Pro.
+        paidPlans: process.env.PAID_PLANS?.trim() === "off" ? "off" : "open",
+      },
+    );
+    extensionApi = api;
   }
   return extensionApi;
 }
@@ -154,6 +162,8 @@ async function health(res) {
     }),
   );
   report.sharedStore = (await storeReady).kind;
+  report.library = extensionApi ? extensionApi.libraryStoreKind() : "not loaded";
+  report.paidPlans = process.env.PAID_PLANS?.trim() === "off" ? "off" : "open (mock)";
   report.keys = {
     insightx: Boolean(process.env.INSIGHTX_API_KEY?.trim()),
     twitter: Boolean(process.env.TWITTER_BEARER_TOKEN?.trim()),
@@ -205,6 +215,8 @@ function readBody(req, limit = 100_000) {
 
 /** Paid answers shared between everyone scanning the same token. See shared-store.mjs. */
 const storeReady = openStore();
+/** The scan library Free scans read Community from. See src/plans/library.ts. */
+const libraryReady = storeReady.then((store) => openLibrary(store));
 
 /** How old a shared answer the caller accepts (x-share-seconds), capped at what we keep. */
 function shareSeconds(req, route) {

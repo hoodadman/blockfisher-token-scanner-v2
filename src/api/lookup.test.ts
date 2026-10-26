@@ -217,3 +217,123 @@ describe('lookupToken with shared answers', () => {
     expect(headersFor.holders.get('x-share-seconds')).toBe('0');
   });
 });
+
+describe('lookupToken on each plan', () => {
+  const routes = (calls: string[]) =>
+    vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      calls.push(url);
+      if (url.includes('/token-pairs/v1/ethereum/')) return Response.json([{ ...pepePair('ethereum', 50_000), info: { socials: [{ type: 'twitter', url: 'https://x.com/pepecoineth' }] } }]);
+      if (url.includes('/token_security/')) return Response.json({ code: 1, result: { [EVM.toLowerCase()]: {} } });
+      if (url.includes('/users/by/username/')) return Response.json({ data: { id: '1', username: 'pepecoineth', public_metrics: { followers_count: 500_000 } } });
+      if (url.includes('search/recent')) return Response.json(noMentions);
+      if (url.includes('honeypot.is')) return Response.json({ honeypotResult: { isHoneypot: true }, simulationResult: { sellTax: 100 } });
+      return new Response(null, { status: 404 });
+    });
+
+  it('Free reads Community from the library once a paid scan has saved it, without calling X', async () => {
+    const { PLANS } = await import('../plans/plans');
+    const { setLibraryStore, memoryLibrary } = await import('../plans/library');
+    setLibraryStore(memoryLibrary());
+    const calls: string[] = [];
+    vi.stubGlobal('fetch', routes(calls));
+
+    const paid = await lookupToken(EVM, undefined, 'eth', {}, false, { plan: PLANS.pro, library: true });
+    expect(paid.communitySource).toBe('fetched');
+
+    calls.length = 0;
+    const free = await lookupToken(EVM, undefined, 'eth', {}, false, { plan: PLANS.free, library: true, mayFetchCommunity: () => false });
+    expect(free.communitySource).toBe('library');
+    expect(free.community?.score).toBe(paid.community?.score);
+    expect(calls.some((url) => url.includes('/api/twitter'))).toBe(false);
+    // Security still runs fresh.
+    expect(calls.some((url) => url.includes('/token_security/'))).toBe(true);
+  });
+
+  it('Free skips Community on a token nobody has scanned once its new tokens are used up', async () => {
+    const { PLANS } = await import('../plans/plans');
+    const { setLibraryStore, memoryLibrary } = await import('../plans/library');
+    setLibraryStore(memoryLibrary());
+    const calls: string[] = [];
+    vi.stubGlobal('fetch', routes(calls));
+    const free = await lookupToken(EVM, undefined, 'eth', {}, false, { plan: PLANS.free, library: true, mayFetchCommunity: () => false });
+    expect(free.communitySource).toBe('skipped');
+    expect(free.community).toBeUndefined();
+    expect(calls.some((url) => url.includes('/api/twitter'))).toBe(false);
+  });
+
+  it('Ultra reads 30 mentions and adds a second opinion that can only make security worse', async () => {
+    const { PLANS } = await import('../plans/plans');
+    const calls: string[] = [];
+    vi.stubGlobal('fetch', routes(calls));
+    const ultra = await lookupToken(EVM, undefined, 'eth', {}, false, { plan: PLANS.ultra });
+    expect(calls.find((url) => url.includes('search/recent'))).toContain('max_results=30');
+    expect(ultra.secondOpinion).toMatchObject({ source: 'Honeypot.is', ok: true });
+    expect(ultra.signals.honeypotRisk).toBe(100);
+
+    calls.length = 0;
+    const pro = await lookupToken(EVM, undefined, 'eth', {}, false, { plan: PLANS.pro });
+    expect(calls.find((url) => url.includes('search/recent'))).toContain('max_results=10');
+    expect(calls.some((url) => url.includes('honeypot.is'))).toBe(false);
+    expect(pro.secondOpinion).toBeUndefined();
+  });
+});
+
+describe('trickle-down between plans', () => {
+  const tweets = (prefix: string, count: number) => ({
+    data: Array.from({ length: count }, (_, i) => ({ id: `${prefix}${100 - i}`, author_id: 'a', public_metrics: { like_count: 1 } })),
+    includes: { users: [{ id: 'a', public_metrics: { followers_count: 10 } }] },
+  });
+  const routes = (calls: string[]) =>
+    vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      calls.push(url);
+      if (url.includes('/token-pairs/v1/ethereum/')) return Response.json([{ ...pepePair('ethereum', 50_000), info: { socials: [{ type: 'twitter', url: 'https://x.com/pepecoineth' }] } }]);
+      if (url.includes('/token_security/')) return Response.json({ code: 1, result: { [EVM.toLowerCase()]: {} } });
+      if (url.includes('/users/by/username/')) {
+        return Response.json({ data: { id: '1', username: 'pepecoineth', description: '@a1 @a2 @a3 @a4 @a5 @a6 @a7', public_metrics: { followers_count: 500_000 } } });
+      }
+      if (url.includes('/users/by?usernames=')) {
+        const names = decodeURIComponent(url.split('usernames=')[1].split('&')[0]).split(',');
+        return Response.json({ data: names.map((username) => ({ username, public_metrics: { followers_count: 1 } })) });
+      }
+      if (url.includes('/users/1/tweets')) return Response.json(tweets('p', Number(url.match(/max_results=(\d+)/)![1])));
+      if (url.includes('search/recent')) return Response.json(tweets('m', Number(url.match(/max_results=(\d+)/)![1])));
+      if (url.includes('counts/recent')) return Response.json({ meta: { total_tweet_count: 400 } });
+      return new Response(null, { status: 404 });
+    });
+
+  it('Ultra reads on from a recent Pro scan instead of starting again', async () => {
+    const { PLANS } = await import('../plans/plans');
+    const { setLibraryStore, memoryLibrary } = await import('../plans/library');
+    setLibraryStore(memoryLibrary());
+    const calls: string[] = [];
+    vi.stubGlobal('fetch', routes(calls));
+
+    const pro = await lookupToken(EVM, undefined, 'eth', {}, false, { plan: PLANS.pro, library: true });
+    expect(pro.communitySource).toBe('fetched');
+
+    calls.length = 0;
+    const ultra = await lookupToken(EVM, undefined, 'eth', {}, false, { plan: PLANS.ultra, library: true });
+    expect(ultra.communitySource).toBe('expanded');
+    const x = calls.filter((url) => url.includes('/api/twitter'));
+    // Only what Pro didn't read: 20 older mentions, 15 older posts, bio accounts 6 to 7.
+    expect(x.find((url) => url.includes('search/recent'))).toMatch(/max_results=20.*until_id=m91/);
+    expect(x.find((url) => url.includes('/users/1/tweets'))).toMatch(/max_results=15.*until_id=p86/);
+    expect(decodeURIComponent(x.find((url) => url.includes('/users/by?usernames='))!)).toContain('usernames=a6,a7&');
+    expect(x.some((url) => url.includes('/users/by/username/') || url.includes('counts/recent'))).toBe(false);
+
+    // Free now gets the Ultra result, without calling X.
+    calls.length = 0;
+    const free = await lookupToken(EVM, undefined, 'eth', {}, false, { plan: PLANS.free, library: true, mayFetchCommunity: () => false });
+    expect(free).toMatchObject({ communitySource: 'library', communityFrom: 'ultra' });
+    expect(free.community?.score).toBe(ultra.community?.score);
+    expect(calls.some((url) => url.includes('/api/twitter'))).toBe(false);
+
+    // So does Pro, inside its window.
+    calls.length = 0;
+    const proAgain = await lookupToken(EVM, undefined, 'eth', {}, false, { plan: PLANS.pro, library: true });
+    expect(proAgain).toMatchObject({ communitySource: 'library', communityFrom: 'ultra' });
+    expect(calls.some((url) => url.includes('/api/twitter'))).toBe(false);
+  });
+});

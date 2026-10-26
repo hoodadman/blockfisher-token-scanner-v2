@@ -21,7 +21,7 @@ function readBody(req: NodeReq): Promise<string> {
     let body = '';
     req.on('data', (chunk) => {
       body += typeof chunk === 'string' ? chunk : new TextDecoder().decode(chunk);
-      if (body.length > 4_000) reject(new Error('body too large'));
+      if (body.length > 250_000) reject(new Error('body too large'));
     });
     req.on('end', () => resolve(body));
     req.on('error', reject);
@@ -65,8 +65,9 @@ export function scanPlugin(): Plugin {
       return;
     }
     let address = '';
+    let parsed: { address?: unknown; plan?: unknown } = {};
     try {
-      const parsed = JSON.parse(await readBody(req)) as { address?: unknown };
+      parsed = JSON.parse(await readBody(req)) as { address?: unknown; plan?: unknown };
       address = typeof parsed.address === 'string' ? parsed.address : '';
     } catch {
       send(res, 400, { ok: false, text: 'Send a JSON body with an address.' });
@@ -84,6 +85,21 @@ export function scanPlugin(): Plugin {
       summarise: `${origin}/api/summarise`,
       socials: `${origin}/api/socials`,
     };
+    // The website sends a plan and wants the full report, as server.mjs gives it in production.
+    if (parsed.plan !== undefined) {
+      try {
+        const api = (await server.ssrLoadModule('/src/server/api.ts')) as {
+          configure(hosts: ApiHosts): void;
+          handleScan(body: unknown, client: string): Promise<{ status: number; body: unknown }>;
+        };
+        api.configure(hosts);
+        const reply = await api.handleScan(parsed, 'dev');
+        send(res, reply.status, reply.body);
+      } catch {
+        send(res, 500, { ok: false, text: 'The scan failed before it could score this token.' });
+      }
+      return;
+    }
     try {
       const loaded = (await server.ssrLoadModule('/src/api/scan.ts')) as { runScan(input: string, hosts: ApiHosts): Promise<ScanResult> };
       const result = await oneAtATime(() => loaded.runScan(address, hosts));

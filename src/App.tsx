@@ -1,11 +1,26 @@
 import { useMemo, useRef, useState } from 'react';
-import { LookupError, isTokenAddress, lookupToken, type TokenLookup } from './api/lookup';
+import { ScanRefused, scanOnServer } from './api/client';
+import { LookupError, isTokenAddress } from './api/lookup';
+import type { ScanReport } from './api/scan';
+import { PlanPicker } from './components/PlanPicker';
 import { ScoreBrief } from './components/ScoreBrief';
 import { ScorePanel } from './components/ScorePanel';
 import { ScoreTriangle } from './components/ScoreTriangle';
 import { TokenSearch } from './components/TokenSearch';
-import { averageScore, scoreToken, type TrustReport } from './scoring';
+import { PLANS, PLAN_IDS, type PlanId } from './plans/plans';
+import { averageScore } from './scoring';
 import { summaryFacts } from './summary/facts';
+
+const PLAN_KEY = 'blockfisher-plan';
+
+function savedPlan(): PlanId {
+  try {
+    const value = localStorage.getItem(PLAN_KEY);
+    return value && (PLAN_IDS as readonly string[]).includes(value) ? (value as PlanId) : 'free';
+  } catch {
+    return 'free';
+  }
+}
 
 const MESSAGES = {
   invalid: 'That doesn’t look like a token address. Check you’ve copied all of it.',
@@ -17,13 +32,23 @@ type View =
   | { status: 'idle' }
   | { status: 'loading' }
   | { status: 'error'; message: string }
-  | { status: 'done'; lookup: TokenLookup; report: TrustReport };
+  | { status: 'done'; report: ScanReport };
 
 export function App() {
   const [view, setView] = useState<View>({ status: 'idle' });
+  const [plan, setPlan] = useState<PlanId>(savedPlan);
   const inFlight = useRef<AbortController | null>(null);
 
-  async function check(address: string) {
+  function choosePlan(next: PlanId) {
+    setPlan(next);
+    try {
+      localStorage.setItem(PLAN_KEY, next);
+    } catch {
+      // Private windows may refuse; the choice still holds for this visit.
+    }
+  }
+
+  async function check(address: string, refresh = false) {
     inFlight.current?.abort();
     if (!isTokenAddress(address)) {
       setView({ status: 'error', message: MESSAGES.invalid });
@@ -34,12 +59,12 @@ export function App() {
     inFlight.current = controller;
     setView({ status: 'loading' });
     try {
-      const lookup = await lookupToken(address, controller.signal);
+      const report = await scanOnServer(address, plan, refresh, controller.signal);
       if (controller.signal.aborted) return;
-      setView({ status: 'done', lookup, report: scoreToken(lookup.signals) });
+      setView({ status: 'done', report });
     } catch (error) {
       if (controller.signal.aborted) return;
-      if (!(error instanceof LookupError)) console.error(error);
+      if (!(error instanceof LookupError) && !(error instanceof ScanRefused)) console.error(error);
       setView({ status: 'error', message: errorMessage(error) });
     }
   }
@@ -67,11 +92,13 @@ export function App() {
         <p className="lede">Paste a token address. The scan shows what it found, then a short brief.</p>
       </header>
 
-      <TokenSearch onSearch={check} error={view.status === 'error' ? view.message : undefined} />
+      <PlanPicker plan={plan} onChange={choosePlan} />
+
+      <TokenSearch onSearch={(address) => check(address)} error={view.status === 'error' ? view.message : undefined} />
 
       <p className="visually-hidden" role="status">
         {view.status === 'loading' && 'Checking this token…'}
-        {view.status === 'done' && `Results for ${view.lookup.name ?? 'this token'} on ${view.lookup.chain.name}.`}
+        {view.status === 'done' && `Results for ${view.report.name ?? 'this token'} on ${view.report.chain.name}.`}
       </p>
 
       {view.status === 'loading' && (
@@ -80,14 +107,14 @@ export function App() {
           Checking this token…
         </div>
       )}
-      {view.status === 'done' && <Result lookup={view.lookup} report={view.report} />}
+      {view.status === 'done' && <Result report={view.report} onRecheck={() => check(view.report.address, true)} />}
     </main>
     </>
   );
 }
 
-function Result({ lookup, report }: { lookup: TokenLookup; report: TrustReport }) {
-  const { name, symbol, chain, address, failures, community, foundation } = lookup;
+function Result({ report: scan, onRecheck }: { report: ScanReport; onRecheck: () => void }) {
+  const { name, symbol, chain, address, failures, community, foundation, security: report } = scan;
   const holdersNeedKey = failures.some(({ source, status }) => source === 'holders' && (status === 401 || status === 403));
   const twitterNeedKey = failures.some(({ source, status }) => source === 'community' && (status === 401 || status === 403));
   const showSymbol = symbol && symbol !== name;
@@ -122,6 +149,8 @@ function Result({ lookup, report }: { lookup: TokenLookup; report: TrustReport }
         </p>
       )}
 
+      <PlanNotes report={scan} onRecheck={onRecheck} />
+
       <div className="result__split">
         <div className="result__visual">
           <ScoreTriangle
@@ -140,7 +169,74 @@ function Result({ lookup, report }: { lookup: TokenLookup; report: TrustReport }
   );
 }
 
+const MINUTE = 60_000;
+
+function ago(at: number, now = Date.now()): string {
+  const minutes = Math.max(0, Math.round((now - at) / MINUTE));
+  if (minutes < 1) return 'just now';
+  if (minutes < 60) return `${minutes} min ago`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 48) return `${hours} hour${hours === 1 ? '' : 's'} ago`;
+  return `${Math.round(hours / 24)} days ago`;
+}
+
+const SOURCE_TEXT: Record<ScanReport['communitySource'], (from?: 'pro' | 'ultra') => string> = {
+  fetched: () => '',
+  library: (from) => ` (from a saved ${from === 'ultra' ? 'Ultra' : 'Pro'} scan)`,
+  expanded: () => ' (a recent Pro scan, read on to Ultra depth)',
+  skipped: () => '',
+};
+
+/** Which plan ran, how old the shared parts are, Ultra's second opinion, and Re-check. */
+function PlanNotes({ report, onRecheck }: { report: ScanReport; onRecheck: () => void }) {
+  const plan = PLANS[report.plan];
+  const community =
+    report.communitySource === 'skipped'
+      ? 'Community not checked'
+      : report.checked.community !== undefined
+        ? `Community checked ${ago(report.checked.community)}${SOURCE_TEXT[report.communitySource](report.communityFrom)}`
+        : 'Community checked now';
+  const opinion = report.secondOpinion;
+  return (
+    <div className="plan-notes">
+      <div className="plan-notes__row">
+        <p>
+          <strong>{plan.name} scan.</strong> Security checked now. {community}.
+        </p>
+        <button
+          type="button"
+          className="plan-notes__recheck"
+          onClick={onRecheck}
+          disabled={plan.rechecks === 0}
+          title={plan.rechecks === 0 ? 'Re-check is part of Pro and Ultra' : undefined}
+        >
+          {plan.rechecks === 0 ? 'Re-check: Pro' : 'Re-check'}
+        </button>
+      </div>
+      {report.notes.map((note) => (
+        <p key={note}>{note}</p>
+      ))}
+      {opinion && (
+        <>
+          <p>
+            <strong>Second opinion from {opinion.source}:</strong>{' '}
+            {!opinion.ok ? 'it didn’t answer this time.' : opinion.findings.length === 0 ? 'nothing found.' : 'it found:'}
+          </p>
+          {opinion.ok && opinion.findings.length > 0 && (
+            <ul>
+              {opinion.findings.map((finding) => (
+                <li key={finding}>{finding}</li>
+              ))}
+            </ul>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 function errorMessage(error: unknown): string {
+  if (error instanceof ScanRefused) return error.message;
   if (!(error instanceof LookupError)) return MESSAGES.unexpected;
   if (error.reason === 'not-found') {
     const chains = new Intl.ListFormat('en-GB', { type: 'disjunction' }).format(error.searched.map((chain) => chain.name));
