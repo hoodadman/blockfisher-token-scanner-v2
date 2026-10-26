@@ -1,5 +1,6 @@
 import { MIN_FOLLOWERS, scoreCommunity, type CommunityReport, type MentionInput } from '../community';
 import type { NamedBacker } from '../foundation';
+import { PLANS, type XDepth } from '../plans/plans';
 import type { ChatCounts } from './chats';
 import { apiHosts } from './hosts';
 import { SHARE_HEADER, savedAt } from './share';
@@ -7,11 +8,9 @@ import { SHARE_HEADER, savedAt } from './share';
 /**
  * X charges per post ($0.005) and per account ($0.010) returned, so read only what moves
  * the score: a recent sample of mentions plus X's count of all of them ($0.005 a call),
- * the account's last 15 posts, and at most 5 accounts named in its bio.
+ * the account's latest posts, and a few accounts named in its bio. How many of each is
+ * the plan's X depth (plans.ts).
  */
-const MENTION_SAMPLE = 10;
-const OWN_POSTS = 15;
-const BIO_PEOPLE = 5;
 
 /** Two rounds of calls run one after the other, so keep each short. */
 const TIMEOUT_MS = 10_000;
@@ -147,10 +146,10 @@ async function fetchProfile(handle: string, signal?: AbortSignal, share?: Share)
   };
 }
 
-async function fetchTweets(userId: string, signal?: AbortSignal, share?: Share) {
+async function fetchTweets(userId: string, count: number, signal?: AbortSignal, share?: Share) {
   try {
     const page = await getJson<TwitterPage<TwitterTweet>>(
-      `/2/users/${userId}/tweets?max_results=${OWN_POSTS}&exclude=retweets,replies&tweet.fields=public_metrics`,
+      `/2/users/${userId}/tweets?max_results=${count}&exclude=retweets,replies&tweet.fields=public_metrics`,
       signal,
       share,
     );
@@ -161,8 +160,8 @@ async function fetchTweets(userId: string, signal?: AbortSignal, share?: Share) 
   }
 }
 
-async function lookupPeople(usernames: readonly string[], signal?: AbortSignal, share?: Share): Promise<NamedBacker[]> {
-  const unique = [...new Set(usernames)].slice(0, BIO_PEOPLE);
+async function lookupPeople(usernames: readonly string[], limit: number, signal?: AbortSignal, share?: Share): Promise<NamedBacker[]> {
+  const unique = [...new Set(usernames)].slice(0, limit);
   if (unique.length === 0) return [];
   try {
     const body = await getJson<{ data?: TwitterUser[] }>(
@@ -180,10 +179,10 @@ async function lookupPeople(usernames: readonly string[], signal?: AbortSignal, 
   }
 }
 
-async function fetchMentions(query: string, signal?: AbortSignal, share?: Share): Promise<MentionInput[]> {
+async function fetchMentions(query: string, count: number, signal?: AbortSignal, share?: Share): Promise<MentionInput[]> {
   const path =
     `/2/tweets/search/recent?query=${encodeURIComponent(query)}` +
-    `&max_results=${MENTION_SAMPLE}&tweet.fields=public_metrics,author_id&expansions=author_id&user.fields=public_metrics`;
+    `&max_results=${count}&tweet.fields=public_metrics,author_id&expansions=author_id&user.fields=public_metrics`;
   const page = await getJson<TwitterPage<TwitterTweet>>(path, signal, share);
   const authors = new Map((page.includes?.users ?? []).map((user) => [user.id, user]));
   return (page.data ?? []).map((tweet) => {
@@ -214,12 +213,13 @@ export async function fetchTwitterBundle(
   input: { handle?: string; name?: string; symbol?: string },
   signal?: AbortSignal,
   shareSeconds?: number,
+  depth: XDepth = PLANS.pro.x,
 ): Promise<TwitterBundle> {
   const share: Share = { seconds: shareSeconds };
   const query = searchQuery(input.symbol, input.name, input.handle);
   const [profileResult, mentionResult, totalResult] = await Promise.allSettled([
     input.handle ? fetchProfile(input.handle, signal, share) : Promise.resolve(undefined),
-    query ? fetchMentions(query, signal, share) : Promise.resolve([]),
+    query ? fetchMentions(query, depth.mentions, signal, share) : Promise.resolve([]),
     query ? fetchMentionTotal(query, signal, share) : Promise.resolve(undefined),
   ]);
   if (profileResult.status === 'rejected' && mentionResult.status === 'rejected') {
@@ -227,8 +227,8 @@ export async function fetchTwitterBundle(
   }
   const profile = profileResult.status === 'fulfilled' ? profileResult.value : undefined;
   const [tweets, mentionedPeople] = await Promise.all([
-    profile ? fetchTweets(profile.id, signal, share) : Promise.resolve([]),
-    profile?.mentions.length ? lookupPeople(profile.mentions, signal, share) : Promise.resolve([]),
+    profile ? fetchTweets(profile.id, depth.ownPosts, signal, share) : Promise.resolve([]),
+    profile?.mentions.length ? lookupPeople(profile.mentions, depth.bioPeople, signal, share) : Promise.resolve([]),
   ]);
   return {
     checkedAt: share.oldest,

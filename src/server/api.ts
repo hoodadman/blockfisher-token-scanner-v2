@@ -6,9 +6,11 @@ import type { InsightXNetwork } from '../adapters';
 import { setApiHosts, type ApiHosts } from '../api/hosts';
 import { DISCORD_CODE, TELEGRAM_NAME, parseTelegramPage, type ChatCounts } from '../api/chats';
 import { identify, parseCandidates, type IdentifiedToken } from '../api/identify';
-import { LookupError, isTokenAddress, type Prefetched } from '../api/lookup';
+import { LookupError, isTokenAddress, type LookupOptions, type Prefetched } from '../api/lookup';
 import { scanErrorText, scanReport, scanText, type ScanReport } from '../api/scan';
 import { parsePrefetched } from './prefetched';
+import { libraryKind, setLibraryStore, type LibraryStore } from '../plans/library';
+import { PLANS, atProDepth, planFrom, type Plan, type PlanId } from '../plans/plans';
 
 export interface ApiReply {
   status: number;
@@ -84,12 +86,43 @@ const running = new Map<string, Promise<ApiReply>>();
 const identities = new TtlCache<IdentifiedToken[]>(IDENTIFY_CACHE_MS);
 // Cached answers don't count: the limit protects the paid APIs behind a fresh scan.
 const scanLimit = new RateLimiter(30, 10 * 60_000);
-// A re-check skips every shared answer, so it costs the most; allow a few.
-const refreshLimit = new RateLimiter(5, 10 * 60_000);
+// A re-check skips every shared answer, so it costs the most; each plan allows a few.
+const refreshLimits = new Map<PlanId, RateLimiter>();
+const DAY_MS = 24 * 60 * 60_000;
+// Free: new tokens a day (library misses). Ultra: deep scans a day. Per client, until accounts exist.
+const dailyLimits = new Map<PlanId, RateLimiter>();
 const identifyLimit = new RateLimiter(120, 10 * 60_000);
 
-export function configure(hosts: ApiHosts): void {
+function limiter(limits: Map<PlanId, RateLimiter>, plan: Plan, max: number, windowMs: number): RateLimiter {
+  let found = limits.get(plan.id);
+  if (!found) {
+    found = new RateLimiter(max, windowMs);
+    limits.set(plan.id, found);
+  }
+  return found;
+}
+
+/**
+ * 'open' (the mock Scanner Pro): each request says its plan and gets it.
+ * 'off': every request runs as Free, whatever it asks for.
+ */
+export type PaidPlans = 'open' | 'off';
+let paidPlans: PaidPlans = 'open';
+
+export function configure(hosts: ApiHosts, options: { library?: LibraryStore; paidPlans?: PaidPlans } = {}): void {
   setApiHosts(hosts);
+  if (options.library) setLibraryStore(options.library);
+  if (options.paidPlans) paidPlans = options.paidPlans;
+}
+
+export function libraryStoreKind(): string {
+  return libraryKind();
+}
+
+/** Resets the limits; for tests. */
+export function resetLimits(): void {
+  refreshLimits.clear();
+  dailyLimits.clear();
 }
 
 const tooMany = (seconds: number): ApiReply => ({
@@ -98,16 +131,20 @@ const tooMany = (seconds: number): ApiReply => ({
 });
 
 export async function handleScan(body: unknown, client: string): Promise<ApiReply> {
-  const raw = (body ?? {}) as { address?: unknown; network?: unknown; refresh?: unknown };
+  const raw = (body ?? {}) as { address?: unknown; network?: unknown; refresh?: unknown; plan?: unknown };
   const refresh = raw.refresh === true;
   const address = typeof raw.address === 'string' ? raw.address.trim() : '';
   const network = typeof raw.network === 'string' && (NETWORKS as readonly string[]).includes(raw.network) ? (raw.network as InsightXNetwork) : undefined;
   if (!address) return { status: 400, body: { ok: false, text: 'Send a contract address to scan.' } };
   if (!isTokenAddress(address)) return { status: 422, body: { ok: false, text: scanErrorText(new LookupError('invalid')) } };
+  let plan = paidPlans === 'off' ? PLANS.free : planFrom(raw.plan);
+  if (refresh && plan.rechecks === 0) {
+    return { status: 403, body: { ok: false, text: 'Re-check is part of Scanner Pro. Free scans use the latest saved community check.' } };
+  }
 
   const prefetched = parsePrefetched(body);
   // Results built from data the client sent are only reused for that client.
-  const key = `${prefetched.pairs ? `${client}|` : ''}${network ?? 'any'}:${address.toLowerCase()}`;
+  const key = `${prefetched.pairs ? `${client}|` : ''}${plan.id}:${network ?? 'any'}:${address.toLowerCase()}`;
   const cached = refresh ? undefined : scans.get(key);
   if (cached) return { status: 200, body: { ok: true, text: scanText(cached), report: cached } };
 
@@ -115,9 +152,24 @@ export async function handleScan(body: unknown, client: string): Promise<ApiRepl
   const pending = running.get(key);
   if (pending) return pending;
 
-  const wait = Math.max(scanLimit.take(client), refresh ? refreshLimit.take(client) : 0);
+  const wait = Math.max(scanLimit.take(client), refresh ? limiter(refreshLimits, plan, plan.rechecks, 10 * 60_000).take(client) : 0);
   if (wait > 0) return tooMany(wait);
-  const work = runScan(key, address, network, prefetched, refresh).finally(() => running.delete(key));
+
+  const notes: string[] = [];
+  let runKey = key;
+  const daily = plan.paidScansPerDay === undefined ? undefined : limiter(dailyLimits, plan, plan.paidScansPerDay, DAY_MS);
+  if (plan.id === 'ultra' && daily && daily.take(client) > 0) {
+    plan = atProDepth(plan);
+    // Kept apart, so other Ultra users never get this shallower result from the cache.
+    runKey = `${key}|pro-depth`;
+    notes.push(`Today’s ${PLANS.ultra.paidScansPerDay} deep scans are used up, so this one ran at Pro depth.`);
+  }
+  const options: LookupOptions = {
+    plan,
+    library: true,
+    mayFetchCommunity: plan.id === 'free' && daily ? () => daily.take(client) === 0 : undefined,
+  };
+  const work = runScan(runKey, address, network, prefetched, refresh, options, notes).finally(() => running.delete(key));
   running.set(key, work);
   return work;
 }
@@ -128,13 +180,16 @@ async function runScan(
   network: InsightXNetwork | undefined,
   prefetched: Prefetched,
   refresh: boolean,
+  options: LookupOptions,
+  notes: string[],
 ): Promise<ApiReply> {
   const started = Date.now();
   try {
-    const report = await scanReport(address, network, undefined, prefetched, refresh);
+    const scanned = await scanReport(address, network, undefined, prefetched, refresh, options);
+    const report = notes.length > 0 ? { ...scanned, notes: [...scanned.notes, ...notes] } : scanned;
     scans.set(key, report);
     const failed = report.failures.map((failure) => `${failure.source}${failure.status ? `:${failure.status}` : ''}`).join(',');
-    console.log(`scan ${network ?? 'any'}:${address} ${Date.now() - started}ms${failed ? ` failed=${failed}` : ''}`);
+    console.log(`scan ${report.plan} ${network ?? 'any'}:${address} ${Date.now() - started}ms community=${report.communitySource}${failed ? ` failed=${failed}` : ''}`);
     return { status: 200, body: { ok: true, text: scanText(report), report } };
   } catch (error) {
     if (!(error instanceof LookupError) || error.reason === 'unavailable') console.error('scan failed', address, `${Date.now() - started}ms`, error);

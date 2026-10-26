@@ -217,3 +217,64 @@ describe('lookupToken with shared answers', () => {
     expect(headersFor.holders.get('x-share-seconds')).toBe('0');
   });
 });
+
+describe('lookupToken on each plan', () => {
+  const routes = (calls: string[]) =>
+    vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      calls.push(url);
+      if (url.includes('/token-pairs/v1/ethereum/')) return Response.json([{ ...pepePair('ethereum', 50_000), info: { socials: [{ type: 'twitter', url: 'https://x.com/pepecoineth' }] } }]);
+      if (url.includes('/token_security/')) return Response.json({ code: 1, result: { [EVM.toLowerCase()]: {} } });
+      if (url.includes('/users/by/username/')) return Response.json({ data: { id: '1', username: 'pepecoineth', public_metrics: { followers_count: 500_000 } } });
+      if (url.includes('search/recent')) return Response.json(noMentions);
+      if (url.includes('honeypot.is')) return Response.json({ honeypotResult: { isHoneypot: true }, simulationResult: { sellTax: 100 } });
+      return new Response(null, { status: 404 });
+    });
+
+  it('Free reads Community from the library once a paid scan has saved it, without calling X', async () => {
+    const { PLANS } = await import('../plans/plans');
+    const { setLibraryStore, memoryLibrary } = await import('../plans/library');
+    setLibraryStore(memoryLibrary());
+    const calls: string[] = [];
+    vi.stubGlobal('fetch', routes(calls));
+
+    const paid = await lookupToken(EVM, undefined, 'eth', {}, false, { plan: PLANS.pro, library: true });
+    expect(paid.communitySource).toBe('fetched');
+
+    calls.length = 0;
+    const free = await lookupToken(EVM, undefined, 'eth', {}, false, { plan: PLANS.free, library: true, mayFetchCommunity: () => false });
+    expect(free.communitySource).toBe('library');
+    expect(free.community?.score).toBe(paid.community?.score);
+    expect(calls.some((url) => url.includes('/api/twitter'))).toBe(false);
+    // Security still runs fresh.
+    expect(calls.some((url) => url.includes('/token_security/'))).toBe(true);
+  });
+
+  it('Free skips Community on a token nobody has scanned once its new tokens are used up', async () => {
+    const { PLANS } = await import('../plans/plans');
+    const { setLibraryStore, memoryLibrary } = await import('../plans/library');
+    setLibraryStore(memoryLibrary());
+    const calls: string[] = [];
+    vi.stubGlobal('fetch', routes(calls));
+    const free = await lookupToken(EVM, undefined, 'eth', {}, false, { plan: PLANS.free, library: true, mayFetchCommunity: () => false });
+    expect(free.communitySource).toBe('skipped');
+    expect(free.community).toBeUndefined();
+    expect(calls.some((url) => url.includes('/api/twitter'))).toBe(false);
+  });
+
+  it('Ultra reads 30 mentions and adds a second opinion that can only make security worse', async () => {
+    const { PLANS } = await import('../plans/plans');
+    const calls: string[] = [];
+    vi.stubGlobal('fetch', routes(calls));
+    const ultra = await lookupToken(EVM, undefined, 'eth', {}, false, { plan: PLANS.ultra });
+    expect(calls.find((url) => url.includes('search/recent'))).toContain('max_results=30');
+    expect(ultra.secondOpinion).toMatchObject({ source: 'Honeypot.is', ok: true });
+    expect(ultra.signals.honeypotRisk).toBe(100);
+
+    calls.length = 0;
+    const pro = await lookupToken(EVM, undefined, 'eth', {}, false, { plan: PLANS.pro });
+    expect(calls.find((url) => url.includes('search/recent'))).toContain('max_results=10');
+    expect(calls.some((url) => url.includes('honeypot.is'))).toBe(false);
+    expect(pro.secondOpinion).toBeUndefined();
+  });
+});

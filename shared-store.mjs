@@ -9,6 +9,7 @@
 
 const MEMORY_LIMIT = 2_000;
 const PREFIX = "share:";
+const LIBRARY_PREFIX = "library:";
 
 export function memoryStore(now = Date.now) {
   const entries = new Map();
@@ -63,6 +64,18 @@ async function redisStore(url) {
       // Redis deletes the entry by itself once the time is up.
       await client.set(PREFIX + key, value, { EX: Math.max(1, Math.round(seconds)) });
     },
+    /** The scan library: kept with no expiry (see src/plans/library.ts). */
+    library: {
+      kind: "redis",
+      async get(key) {
+        if (!client.isReady) return undefined;
+        return (await client.get(LIBRARY_PREFIX + key)) ?? undefined;
+      },
+      async set(key, value) {
+        if (!client.isReady) return;
+        await client.set(LIBRARY_PREFIX + key, value);
+      },
+    },
   };
 }
 
@@ -108,4 +121,44 @@ export async function sharedFetch(store, key, maxAgeSeconds, keepSeconds, fetchF
     }
   }
   return { ...fresh, savedAt, shared: false };
+}
+
+/** The scan library in Postgres: one row per token, replaced by each newer scan. */
+async function postgresLibrary(url) {
+  const { default: pg } = await import("pg");
+  const pool = new pg.Pool({ connectionString: url, max: 4, connectionTimeoutMillis: 8_000 });
+  pool.on("error", (error) => console.error("scan library:", error.message));
+  await pool.query(
+    "create table if not exists scan_library (key text primary key, value text not null, updated_at timestamptz not null default now())",
+  );
+  return {
+    kind: "postgres",
+    async get(key) {
+      const result = await pool.query("select value from scan_library where key = $1", [key]);
+      return result.rows[0]?.value;
+    },
+    async set(key, value) {
+      await pool.query(
+        "insert into scan_library (key, value) values ($1, $2) on conflict (key) do update set value = excluded.value, updated_at = now()",
+        [key, value],
+      );
+    },
+  };
+}
+
+/**
+ * Where the scan library lives: Postgres (DATABASE_URL), which keeps it for good; else the
+ * shared store's Redis with no expiry; else undefined, and the scanner keeps it in memory.
+ */
+export async function openLibrary(sharedStore, url = process.env.DATABASE_URL?.trim()) {
+  if (url) {
+    try {
+      const library = await postgresLibrary(url);
+      console.log("scan library: postgres");
+      return library;
+    } catch (error) {
+      console.error("scan library: postgres unavailable:", error instanceof Error ? error.message : error);
+    }
+  }
+  return sharedStore.library;
 }
