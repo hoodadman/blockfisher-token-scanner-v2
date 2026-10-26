@@ -44,16 +44,18 @@ export interface Plan {
   /** Oldest shared holder answer accepted, in seconds; undefined uses share.ts. */
   holdersMaxAge?: number;
   x: XDepth;
+  /**
+   * Whether a scan on this plan may pay X for Community when the library has nothing
+   * for the token. Free never does, so it costs nothing in X however many use it.
+   */
+  paysForX: boolean;
   /** Which of the two depths `x` is; results are saved in the library under it. */
   depth: Depth;
   /** Second-opinion security checks (Honeypot.is on EVM, RugCheck on Solana). */
   extraSecurity: boolean;
   /** Re-checks allowed per client in 10 minutes; 0 means no Re-check. */
   rechecks: number;
-  /**
-   * Scans a client may make each day that cost us X calls. For Free, tokens with no saved
-   * result yet; for Ultra, deep scans (after that, Ultra scans run at Pro depth).
-   */
+  /** Deep scans a client may make each day; after that, Ultra scans run at Pro depth. */
   paidScansPerDay?: number;
 }
 
@@ -70,14 +72,14 @@ export const PLANS: Readonly<Record<PlanId, Plan>> = {
       'Security checks run fresh on every scan',
       'Liquidity and market data are live',
       'Community from the latest saved scan, with its date',
-      '5 new tokens a day that nobody has scanned yet',
+      'Tokens nobody has scanned yet get Security only',
     ],
     community: 'library',
     x: STANDARD_X,
+    paysForX: false,
     depth: 'pro',
     extraSecurity: false,
     rechecks: 0,
-    paidScansPerDay: 5,
   },
   pro: {
     id: 'pro',
@@ -88,10 +90,11 @@ export const PLANS: Readonly<Record<PlanId, Plan>> = {
       'Everything in Free',
       'Community never more than a day old (12 hours for new tokens)',
       'Re-check any token for a fresh result',
-      'Unlimited new tokens',
+      'Community checked on tokens nobody has scanned yet',
     ],
     community: 'shared',
     x: STANDARD_X,
+    paysForX: true,
     depth: 'pro',
     extraSecurity: false,
     rechecks: 5,
@@ -112,6 +115,7 @@ export const PLANS: Readonly<Record<PlanId, Plan>> = {
     communityMaxAge: 6 * 60 * 60,
     holdersMaxAge: 10 * 60,
     x: { mentions: 30, ownPosts: 30, bioPeople: 10 },
+    paysForX: true,
     depth: 'ultra',
     extraSecurity: true,
     rechecks: 10,

@@ -114,11 +114,6 @@ export interface LookupOptions {
   plan?: Plan;
   /** Read and write the scan library (server only; see plans/library.ts). */
   library?: boolean;
-  /**
-   * Asked before a Free scan fetches Community because the library has nothing for the
-   * token: true spends one of the client's free new tokens, false skips Community.
-   */
-  mayFetchCommunity?: () => boolean;
 }
 
 class HttpError extends Error {
@@ -243,7 +238,8 @@ export async function lookupToken(
       communityFrom = 'pro';
       return base;
     });
-  } else if (plan.community === 'library' && options.mayFetchCommunity && !options.mayFetchCommunity()) {
+  } else if (!plan.paysForX) {
+    // Free never pays X: a token nobody has scanned yet gets Security only.
     communitySource = 'skipped';
     communityWork = Promise.resolve(undefined);
   } else {

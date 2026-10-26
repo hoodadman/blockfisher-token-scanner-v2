@@ -59,9 +59,10 @@ The three scanner versions are defined in one file, `src/plans/plans.ts`; nothin
 | Foundation | Live market data | Same | Same |
 | Community (X) | Best saved result (Ultra first), any age | Saved Ultra or Pro result up to 24 hours old (12 hours new tokens) | Saved Ultra up to 6 hours old, or a recent Pro read on to Ultra depth |
 | X read per fresh check | 10 mentions, 15 own posts, 5 bio accounts | Same | 30 mentions, 30 own posts, 10 bio accounts |
-| Worst-case X cost of a fresh check | $0.29 | $0.29 | $0.72 |
+| Worst-case X cost of a fresh check | $0 (never calls X) | $0.29 | $0.72 |
 | Re-check | No | 5 per 10 min | 10 per 10 min |
-| Daily limit | 5 tokens a day with no saved result; after that Community is skipped | None | 20 deep scans, then Pro depth |
+| Tokens nobody has scanned yet | Security and Foundation only; Community not checked | Checked | Checked |
+| Daily limit | None | None | 20 deep scans, then Pro depth |
 
 Second-opinion findings can only make a result worse: each signal keeps the worse of the two readings.
 
@@ -69,7 +70,7 @@ Second-opinion findings can only make a result worse: each signal keeps the wors
 
 | Plan | Community comes from, in order |
 | --- | --- |
-| Free | Saved Ultra result (any age; unless the Pro one is over a week newer), saved Pro result, else a fresh Pro-depth check (5 new tokens a day) |
+| Free | Saved Ultra result (any age; unless the Pro one is over a week newer), saved Pro result, else nothing: Free never pays X |
 | Pro | Saved Ultra result within 24h (12h new tokens), saved Pro result within that, else a fresh check |
 | Ultra | Saved Ultra result within 6h; else a saved Pro result within 6h, read on to Ultra depth (only the older mentions and posts and the extra bio accounts Pro didn't read, about $0.43 instead of $0.72); else a fresh Ultra check |
 

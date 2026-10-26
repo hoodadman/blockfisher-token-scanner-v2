@@ -89,7 +89,7 @@ const scanLimit = new RateLimiter(30, 10 * 60_000);
 // A re-check skips every shared answer, so it costs the most; each plan allows a few.
 const refreshLimits = new Map<PlanId, RateLimiter>();
 const DAY_MS = 24 * 60 * 60_000;
-// Free: new tokens a day (library misses). Ultra: deep scans a day. Per client, until accounts exist.
+// Ultra's deep scans a day. Per client, until accounts exist.
 const dailyLimits = new Map<PlanId, RateLimiter>();
 const identifyLimit = new RateLimiter(120, 10 * 60_000);
 
@@ -164,11 +164,7 @@ export async function handleScan(body: unknown, client: string): Promise<ApiRepl
     runKey = `${key}|pro-depth`;
     notes.push(`Today’s ${PLANS.ultra.paidScansPerDay} deep scans are used up, so this one ran at Pro depth.`);
   }
-  const options: LookupOptions = {
-    plan,
-    library: true,
-    mayFetchCommunity: plan.id === 'free' && daily ? () => daily.take(client) === 0 : undefined,
-  };
+  const options: LookupOptions = { plan, library: true };
   const work = runScan(runKey, address, network, prefetched, refresh, options, notes).finally(() => running.delete(key));
   running.set(key, work);
   return work;

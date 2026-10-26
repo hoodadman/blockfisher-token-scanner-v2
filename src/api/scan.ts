@@ -56,7 +56,7 @@ const DAY_MS = 24 * 60 * 60_000;
 export function planNotes(report: Pick<ScanReport, 'plan' | 'communitySource' | 'checked'>, now = Date.now()): string[] {
   const notes: string[] = [];
   if (report.communitySource === 'skipped') {
-    notes.push('Community wasn’t checked: nobody has scanned this token yet and today’s 5 free new tokens are used up. Pro checks it straight away.');
+    notes.push('Nobody has checked this token’s community yet, so this Free scan shows Security and Foundation only. Pro checks Community straight away.');
   }
   const at = report.checked.community;
   if (report.communitySource === 'library' && at !== undefined) {

@@ -242,7 +242,7 @@ describe('lookupToken on each plan', () => {
     expect(paid.communitySource).toBe('fetched');
 
     calls.length = 0;
-    const free = await lookupToken(EVM, undefined, 'eth', {}, false, { plan: PLANS.free, library: true, mayFetchCommunity: () => false });
+    const free = await lookupToken(EVM, undefined, 'eth', {}, false, { plan: PLANS.free, library: true });
     expect(free.communitySource).toBe('library');
     expect(free.community?.score).toBe(paid.community?.score);
     expect(calls.some((url) => url.includes('/api/twitter'))).toBe(false);
@@ -250,13 +250,13 @@ describe('lookupToken on each plan', () => {
     expect(calls.some((url) => url.includes('/token_security/'))).toBe(true);
   });
 
-  it('Free skips Community on a token nobody has scanned once its new tokens are used up', async () => {
+  it('Free never calls X: a token nobody has scanned gets Security only', async () => {
     const { PLANS } = await import('../plans/plans');
     const { setLibraryStore, memoryLibrary } = await import('../plans/library');
     setLibraryStore(memoryLibrary());
     const calls: string[] = [];
     vi.stubGlobal('fetch', routes(calls));
-    const free = await lookupToken(EVM, undefined, 'eth', {}, false, { plan: PLANS.free, library: true, mayFetchCommunity: () => false });
+    const free = await lookupToken(EVM, undefined, 'eth', {}, false, { plan: PLANS.free, library: true });
     expect(free.communitySource).toBe('skipped');
     expect(free.community).toBeUndefined();
     expect(calls.some((url) => url.includes('/api/twitter'))).toBe(false);
@@ -325,7 +325,7 @@ describe('trickle-down between plans', () => {
 
     // Free now gets the Ultra result, without calling X.
     calls.length = 0;
-    const free = await lookupToken(EVM, undefined, 'eth', {}, false, { plan: PLANS.free, library: true, mayFetchCommunity: () => false });
+    const free = await lookupToken(EVM, undefined, 'eth', {}, false, { plan: PLANS.free, library: true });
     expect(free).toMatchObject({ communitySource: 'library', communityFrom: 'ultra' });
     expect(free.community?.score).toBe(ultra.community?.score);
     expect(calls.some((url) => url.includes('/api/twitter'))).toBe(false);
