@@ -32,7 +32,7 @@ Turns what the extension found on a page into tokens it can scan. Send up to 5 c
 
 `network` is optional. The extension also sends `pairs` (DexScreener's `token-pairs/v1` answer for that chain) and `coingecko` (the coin's `tickers`), fetched in the user's browser: DexScreener and CoinGecko answer 429 to Render's shared addresses. The server keeps only the fields it reads, uses pairs only when `network` is set, and caches such results per client. Without them it fetches the data itself. The reply has `text` (the same summary the OpenClaw agent reads from the dev server) and `report`, the full score: overall, security report and groups, community, foundation, brief, the sources that failed, and `checked`: when the shared parts (`community`, `holders`) were fetched, in ms.
 
-Send `"plan": "free" | "pro" | "ultra"` to choose the scanner version (see Plans below). Without it the scan runs as Pro, so the extension works as before. The report then also has `plan`, `communitySource` (`fetched`, `library` or `skipped`), `secondOpinion` (Ultra only) and `notes`, plain sentences for the card about where the result came from.
+Send `"plan": "free" | "pro" | "ultra"` to choose the scanner version (see Plans below). Without it the scan runs as Pro, so the extension works as before. The report then also has `plan`, `communitySource` and `communityFrom` (see Plans), `secondOpinion` (Ultra only) and `notes`, plain sentences for the card about where the result came from.
 
 Send `"refresh": true` for a re-check: the scan skips every shared answer and fetches them again (and saves the new ones for others).
 
@@ -57,7 +57,7 @@ The three scanner versions are defined in one file, `src/plans/plans.ts`; nothin
 | Security (GoPlus) | Fresh every scan | Fresh every scan | Fresh every scan, plus Honeypot.is (EVM) or RugCheck (Solana) as a second opinion |
 | Holders (InsightX) | Shared 1 hour (10 min new tokens) | Same | At most 10 minutes old |
 | Foundation | Live market data | Same | Same |
-| Community (X) | Latest saved result from the library, any age | Shared 24 hours (12 hours new tokens) | At most 6 hours old |
+| Community (X) | Best saved result (Ultra first), any age | Saved Ultra or Pro result up to 24 hours old (12 hours new tokens) | Saved Ultra up to 6 hours old, or a recent Pro read on to Ultra depth |
 | X read per fresh check | 10 mentions, 15 own posts, 5 bio accounts | Same | 30 mentions, 30 own posts, 10 bio accounts |
 | Worst-case X cost of a fresh check | $0.29 | $0.29 | $0.72 |
 | Re-check | No | 5 per 10 min | 10 per 10 min |
@@ -65,7 +65,15 @@ The three scanner versions are defined in one file, `src/plans/plans.ts`; nothin
 
 Second-opinion findings can only make a result worse: each signal keeps the worse of the two readings.
 
-**The library** keeps the latest X answers for every token anyone has scanned, for good. Free scans read Community from it; every Pro and Ultra scan writes back, so paying users keep it fresh for everyone. Only the server writes it, from answers it fetched itself. It lives in Postgres when `DATABASE_URL` is set (table `scan_library`, created on start), else in the shared store's Redis with no expiry, else in memory. `/api/health` shows which (`library`).
+**The library** keeps the latest X answers for every token anyone has scanned, for good: one Pro-depth and one Ultra-depth result per token. Each plan works on its own but reads what others already paid for before spending anything (`choose` in `src/plans/library.ts`):
+
+| Plan | Community comes from, in order |
+| --- | --- |
+| Free | Saved Ultra result (any age; unless the Pro one is over a week newer), saved Pro result, else a fresh Pro-depth check (5 new tokens a day) |
+| Pro | Saved Ultra result within 24h (12h new tokens), saved Pro result within that, else a fresh check |
+| Ultra | Saved Ultra result within 6h; else a saved Pro result within 6h, read on to Ultra depth (only the older mentions and posts and the extra bio accounts Pro didn't read, about $0.43 instead of $0.72); else a fresh Ultra check |
+
+A Re-check skips the library. Every check that paid for X writes back at its depth, so results trickle down from Ultra to Pro to Free. The report says which (`communitySource`: `fetched`, `library`, `expanded` or `skipped`; `communityFrom`: `pro` or `ultra`). Only the server writes the library, from answers it fetched itself. It lives in Postgres when `DATABASE_URL` is set (table `scan_library`, created on start), else in the shared store's Redis with no expiry, else in memory. `/api/health` shows which (`library`).
 
 **Billing doesn't exist yet**: this is the mock Scanner Pro, and each request says its own plan. Limits are per client IP until there are accounts. Set `PAID_PLANS=off` to run every scan as Free.
 

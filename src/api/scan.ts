@@ -8,7 +8,7 @@ import { summaryFacts } from '../summary/facts';
 import type { PillarBrief } from '../summary/types';
 import { LookupError, isTokenAddress, lookupToken, type LookupOptions, type Prefetched, type SourceFailure } from './lookup';
 import type { SecondOpinion } from './secondOpinion';
-import { PLANS, type PlanId } from '../plans/plans';
+import { PLANS, type Depth, type PlanId } from '../plans/plans';
 import { withApiHosts, type ApiHosts } from './hosts';
 
 export interface ScanResult {
@@ -40,8 +40,10 @@ export interface ScanReport {
   checked: { community?: number; holders?: number };
   /** The scanner version that ran (plans.ts). */
   plan: PlanId;
-  /** Where Community came from: fetched (fresh or shared), the library, or skipped. */
-  communitySource: 'fetched' | 'library' | 'skipped';
+  /** Where Community came from: fetched (fresh or shared), the library, a Pro result read on to Ultra depth, or skipped. */
+  communitySource: 'fetched' | 'library' | 'expanded' | 'skipped';
+  /** The depth of the X data behind Community: an Ultra result can serve Free and Pro. */
+  communityFrom?: Depth;
   /** Ultra's second-opinion security checks. */
   secondOpinion?: SecondOpinion;
   /** Plain-language notes about this result, for the card. */
@@ -111,6 +113,7 @@ export async function scanReport(
     checked: lookup.checked,
     plan: (options.plan ?? PLANS.pro).id,
     communitySource: lookup.communitySource,
+    communityFrom: lookup.communityFrom,
     secondOpinion: lookup.secondOpinion,
     notes: planNotes({ plan: (options.plan ?? PLANS.pro).id, communitySource: lookup.communitySource, checked: lookup.checked }),
   };

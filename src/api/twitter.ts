@@ -32,6 +32,7 @@ interface TwitterUser {
 }
 
 interface TwitterTweet {
+  id?: string;
   author_id?: string;
   public_metrics?: {
     like_count?: number;
@@ -65,7 +66,14 @@ export interface TwitterBundle {
   mentions: MentionInput[];
   /** All mentions in the last 7 days, from X's count; undefined when the count failed. */
   mentionTotal?: number;
+  /** How much of X this bundle read, so a deeper scan can read on from where it stopped. */
+  read?: XDepth;
+  /** The oldest post id read of each kind; a deeper scan asks X for posts before it. */
+  oldest?: { mention?: string; post?: string };
 }
+
+/** Posts come newest first, so the last one is the oldest. */
+const lastId = (tweets: readonly TwitterTweet[]) => tweets.at(-1)?.id;
 
 class TwitterError extends Error {
   readonly status: number;
@@ -146,22 +154,24 @@ async function fetchProfile(handle: string, signal?: AbortSignal, share?: Share)
   };
 }
 
-async function fetchTweets(userId: string, count: number, signal?: AbortSignal, share?: Share) {
+async function fetchTweets(userId: string, count: number, signal?: AbortSignal, share?: Share, untilId?: string) {
   try {
     const page = await getJson<TwitterPage<TwitterTweet>>(
-      `/2/users/${userId}/tweets?max_results=${count}&exclude=retweets,replies&tweet.fields=public_metrics`,
+      // X answers 5 to 100 posts a page.
+      `/2/users/${userId}/tweets?max_results=${Math.max(5, count)}&exclude=retweets,replies&tweet.fields=public_metrics${untilId ? `&until_id=${untilId}` : ''}`,
       signal,
       share,
     );
-    return (page.data ?? []).map(tweetStats);
+    const data = (page.data ?? []).slice(0, count);
+    return { tweets: data.map(tweetStats), oldest: lastId(data) };
   } catch (error) {
-    if (error instanceof TwitterError) return [];
+    if (error instanceof TwitterError) return { tweets: [], oldest: undefined };
     throw error;
   }
 }
 
-async function lookupPeople(usernames: readonly string[], limit: number, signal?: AbortSignal, share?: Share): Promise<NamedBacker[]> {
-  const unique = [...new Set(usernames)].slice(0, limit);
+async function lookupPeople(usernames: readonly string[], limit: number, signal?: AbortSignal, share?: Share, skip = 0): Promise<NamedBacker[]> {
+  const unique = [...new Set(usernames)].slice(skip, limit);
   if (unique.length === 0) return [];
   try {
     const body = await getJson<{ data?: TwitterUser[] }>(
@@ -179,19 +189,29 @@ async function lookupPeople(usernames: readonly string[], limit: number, signal?
   }
 }
 
-async function fetchMentions(query: string, count: number, signal?: AbortSignal, share?: Share): Promise<MentionInput[]> {
+async function fetchMentions(
+  query: string,
+  count: number,
+  signal?: AbortSignal,
+  share?: Share,
+  untilId?: string,
+): Promise<{ mentions: MentionInput[]; oldest?: string }> {
   const path =
+    // X answers 10 to 100 posts a page.
     `/2/tweets/search/recent?query=${encodeURIComponent(query)}` +
-    `&max_results=${count}&tweet.fields=public_metrics,author_id&expansions=author_id&user.fields=public_metrics`;
+    `&max_results=${Math.max(10, count)}&tweet.fields=public_metrics,author_id&expansions=author_id&user.fields=public_metrics` +
+    (untilId ? `&until_id=${untilId}` : '');
   const page = await getJson<TwitterPage<TwitterTweet>>(path, signal, share);
   const authors = new Map((page.includes?.users ?? []).map((user) => [user.id, user]));
-  return (page.data ?? []).map((tweet) => {
+  const data = (page.data ?? []).slice(0, count);
+  const mentions = data.map((tweet) => {
     const author = tweet.author_id ? authors.get(tweet.author_id) : undefined;
     return {
       followers: author?.public_metrics?.followers_count ?? 0,
       ...tweetStats(tweet),
     };
   });
+  return { mentions, oldest: lastId(data) };
 }
 
 /** How many posts mentioned the token in the last 7 days. One flat-priced call. */
@@ -219,24 +239,63 @@ export async function fetchTwitterBundle(
   const query = searchQuery(input.symbol, input.name, input.handle);
   const [profileResult, mentionResult, totalResult] = await Promise.allSettled([
     input.handle ? fetchProfile(input.handle, signal, share) : Promise.resolve(undefined),
-    query ? fetchMentions(query, depth.mentions, signal, share) : Promise.resolve([]),
+    query ? fetchMentions(query, depth.mentions, signal, share) : Promise.resolve({ mentions: [], oldest: undefined }),
     query ? fetchMentionTotal(query, signal, share) : Promise.resolve(undefined),
   ]);
   if (profileResult.status === 'rejected' && mentionResult.status === 'rejected') {
     throw profileResult.reason;
   }
   const profile = profileResult.status === 'fulfilled' ? profileResult.value : undefined;
-  const [tweets, mentionedPeople] = await Promise.all([
-    profile ? fetchTweets(profile.id, depth.ownPosts, signal, share) : Promise.resolve([]),
+  const [posts, mentionedPeople] = await Promise.all([
+    profile ? fetchTweets(profile.id, depth.ownPosts, signal, share) : Promise.resolve({ tweets: [], oldest: undefined }),
     profile?.mentions.length ? lookupPeople(profile.mentions, depth.bioPeople, signal, share) : Promise.resolve([]),
   ]);
+  const sample = mentionResult.status === 'fulfilled' ? mentionResult.value : { mentions: [], oldest: undefined };
   return {
     checkedAt: share.oldest,
     profile,
-    tweets,
+    tweets: posts.tweets,
     mentionedPeople,
-    mentions: mentionResult.status === 'fulfilled' ? mentionResult.value : [],
+    mentions: sample.mentions,
     mentionTotal: totalResult.status === 'fulfilled' ? totalResult.value : undefined,
+    read: depth,
+    oldest: { mention: sample.oldest, post: posts.oldest },
+  };
+}
+
+/**
+ * Reads on from a shallower bundle to `depth`: older mentions and posts than it saw, and
+ * the bio accounts it didn't look up. The profile and mention count are reused, so a deep
+ * scan after a recent standard one pays only for what is new. The result is the same
+ * sample a deep scan would have read, give or take posts made in between.
+ */
+export async function expandTwitterBundle(
+  base: TwitterBundle,
+  input: { handle?: string; name?: string; symbol?: string },
+  depth: XDepth,
+  signal?: AbortSignal,
+): Promise<TwitterBundle> {
+  const read = base.read ?? PLANS.pro.x;
+  const share: Share = {};
+  const query = searchQuery(input.symbol, input.name, input.handle);
+  // Fewer posts than asked for means X had no more; there is nothing older to read.
+  const moreMentions = query && base.oldest?.mention && base.mentions.length >= read.mentions ? depth.mentions - read.mentions : 0;
+  const morePosts = base.profile && base.oldest?.post && base.tweets.length >= read.ownPosts ? depth.ownPosts - read.ownPosts : 0;
+  const morePeople = base.profile ? depth.bioPeople - read.bioPeople : 0;
+  const [mentions, posts, people] = await Promise.all([
+    moreMentions > 0 ? fetchMentions(query!, moreMentions, signal, share, base.oldest!.mention) : Promise.resolve({ mentions: [], oldest: undefined }),
+    morePosts > 0 ? fetchTweets(base.profile!.id, morePosts, signal, share, base.oldest!.post) : Promise.resolve({ tweets: [], oldest: undefined }),
+    morePeople > 0 && base.profile!.mentions.length > read.bioPeople
+      ? lookupPeople(base.profile!.mentions, depth.bioPeople, signal, share, read.bioPeople)
+      : Promise.resolve([]),
+  ]);
+  return {
+    ...base,
+    tweets: [...base.tweets, ...posts.tweets],
+    mentions: [...base.mentions, ...mentions.mentions],
+    mentionedPeople: [...base.mentionedPeople, ...people],
+    read: depth,
+    oldest: { mention: mentions.oldest ?? base.oldest?.mention, post: posts.oldest ?? base.oldest?.post },
   };
 }
 

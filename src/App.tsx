@@ -180,6 +180,13 @@ function ago(at: number, now = Date.now()): string {
   return `${Math.round(hours / 24)} days ago`;
 }
 
+const SOURCE_TEXT: Record<ScanReport['communitySource'], (from?: 'pro' | 'ultra') => string> = {
+  fetched: () => '',
+  library: (from) => ` (from a saved ${from === 'ultra' ? 'Ultra' : 'Pro'} scan)`,
+  expanded: () => ' (a recent Pro scan, read on to Ultra depth)',
+  skipped: () => '',
+};
+
 /** Which plan ran, how old the shared parts are, Ultra's second opinion, and Re-check. */
 function PlanNotes({ report, onRecheck }: { report: ScanReport; onRecheck: () => void }) {
   const plan = PLANS[report.plan];
@@ -187,7 +194,7 @@ function PlanNotes({ report, onRecheck }: { report: ScanReport; onRecheck: () =>
     report.communitySource === 'skipped'
       ? 'Community not checked'
       : report.checked.community !== undefined
-        ? `Community checked ${ago(report.checked.community)}${report.communitySource === 'library' ? ' (saved scan)' : ''}`
+        ? `Community checked ${ago(report.checked.community)}${SOURCE_TEXT[report.communitySource](report.communityFrom)}`
         : 'Community checked now';
   const opinion = report.secondOpinion;
   return (

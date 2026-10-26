@@ -21,10 +21,10 @@ import type { TokenSignals } from '../scoring';
 import { apiHosts } from './hosts';
 import { SHARE_HEADER, savedAt, shareSeconds } from './share';
 import { chatLinksFromDexScreener, fetchChatCounts } from './chats';
-import { communityFromBundle, fetchTwitterBundle, TwitterError, type TwitterBundle } from './twitter';
+import { communityFromBundle, expandTwitterBundle, fetchTwitterBundle, TwitterError, type TwitterBundle } from './twitter';
 import { fetchSecondOpinion, worseOf, type SecondOpinion } from './secondOpinion';
-import { readLibrary, writeLibrary } from '../plans/library';
-import { PLANS, type Plan } from '../plans/plans';
+import { choose, readLibrary, writeLibrary } from '../plans/library';
+import { PLANS, type Depth, type Plan } from '../plans/plans';
 
 export interface Chain {
   name: string;
@@ -98,8 +98,13 @@ export interface TokenLookup {
   failures: SourceFailure[];
   /** When shared answers were fetched (ms), when they came from our server's store. */
   checked: { community?: number; holders?: number };
-  /** Where Community came from: a fresh or shared answer, the library, or nowhere. */
-  communitySource: 'fetched' | 'library' | 'skipped';
+  /**
+   * Where Community came from: fetched (fresh or a shared answer), the library, a saved
+   * Pro result read on to Ultra depth ('expanded'), or nowhere ('skipped').
+   */
+  communitySource: 'fetched' | 'library' | 'expanded' | 'skipped';
+  /** The depth of the X data behind Community. */
+  communityFrom?: Depth;
   /** Ultra's second-opinion security checks, when they ran. */
   secondOpinion?: SecondOpinion;
 }
@@ -216,24 +221,36 @@ export async function lookupToken(
   const capped = (seconds: number, max?: number) => (max === undefined ? seconds : Math.min(seconds, max));
   const holderShare: { seconds: number; at?: number } = { seconds: capped(shareSeconds('holders', launchedAt, fresh), plan.holdersMaxAge) };
 
-  // Free reads Community from the library, whatever its age; a re-check always fetches.
-  const saved = plan.community === 'library' && options.library && !fresh ? await readLibrary(chain.network, address) : undefined;
-  const communitySource: TokenLookup['communitySource'] = saved
-    ? 'library'
-    : plan.community === 'library' && options.mayFetchCommunity && !options.mayFetchCommunity()
-      ? 'skipped'
-      : 'fetched';
-  const communityWork: Promise<TwitterBundle | undefined> =
-    communitySource === 'library'
-      ? Promise.resolve(saved!.bundle)
-      : communitySource === 'skipped'
-        ? Promise.resolve(undefined)
-        : fetchTwitterBundle(
-            { handle: twitter, name: identity.name, symbol: identity.symbol },
-            signal,
-            capped(shareSeconds('community', launchedAt, fresh), plan.communityMaxAge),
-            plan.x,
-          );
+  // What others already paid for comes first (library.ts `choose`); a re-check always fetches.
+  const communityAge = capped(shareSeconds('community', launchedAt, fresh), plan.communityMaxAge);
+  const shelf = options.library && !fresh ? await readLibrary(chain.network, address) : {};
+  const choice = choose(plan, shelf, communityAge);
+  const who = { handle: twitter, name: identity.name, symbol: identity.symbol };
+  let communitySource: TokenLookup['communitySource'];
+  let communityFrom: Depth | undefined;
+  let communityWork: Promise<TwitterBundle | undefined>;
+  if ('use' in choice) {
+    communitySource = 'library';
+    communityFrom = choice.from;
+    communityWork = Promise.resolve(choice.use.bundle);
+  } else if ('expand' in choice) {
+    communitySource = 'expanded';
+    communityFrom = plan.depth;
+    // If X fails part-way, the Pro result still stands.
+    const base = choice.expand.bundle;
+    communityWork = expandTwitterBundle(base, who, plan.x, signal).catch(() => {
+      communitySource = 'library';
+      communityFrom = 'pro';
+      return base;
+    });
+  } else if (plan.community === 'library' && options.mayFetchCommunity && !options.mayFetchCommunity()) {
+    communitySource = 'skipped';
+    communityWork = Promise.resolve(undefined);
+  } else {
+    communitySource = 'fetched';
+    communityFrom = plan.depth;
+    communityWork = fetchTwitterBundle(who, signal, communityAge, plan.x);
+  }
 
   // Security runs on every scan, on every plan: it is what changes fastest when a token is rugged.
   const [scan, holders, twitterBundle, gecko, chats, extra] = await Promise.allSettled([
@@ -259,8 +276,9 @@ export async function lookupToken(
   });
   const signals = secondOpinion ? worseOf(firstOpinion, secondOpinion.signals) : firstOpinion;
   const bundle = twitterBundle.status === 'fulfilled' ? twitterBundle.value : undefined;
-  if (bundle && communitySource === 'fetched' && options.library) {
-    await writeLibrary(chain.network, address, { savedAt: bundle.checkedAt ?? Date.now(), plan: plan.id, bundle });
+  // Whatever this scan paid for goes back in the library for everyone else.
+  if (bundle && (communitySource === 'fetched' || communitySource === 'expanded') && options.library) {
+    await writeLibrary(chain.network, address, plan.depth, { savedAt: bundle.checkedAt ?? Date.now(), plan: plan.id, bundle });
   }
 
   return {
@@ -284,10 +302,11 @@ export async function lookupToken(
     }),
     failures,
     checked: {
-      community: communitySource === 'library' ? (saved!.bundle.checkedAt ?? saved!.savedAt) : bundle?.checkedAt,
+      community: bundle?.checkedAt ?? ('use' in choice ? choice.use.savedAt : undefined),
       holders: holders.status === 'fulfilled' ? holderShare.at : undefined,
     },
     communitySource,
+    communityFrom,
     secondOpinion: secondOpinion?.opinion,
   };
 }

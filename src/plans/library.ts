@@ -1,11 +1,12 @@
 import type { InsightXNetwork } from '../adapters';
 import type { TwitterBundle } from '../api/twitter';
-import type { PlanId } from './plans';
+import type { Depth, Plan, PlanId } from './plans';
 
 /**
  * The scan library: the latest X answers for every token anyone has scanned, kept for
- * good. Free scans read Community from here, whatever its age; every Pro and Ultra scan
- * writes its answers back, so paying users keep the library fresh for everyone.
+ * good, one at each depth (Pro and Ultra). Every scan that pays for X writes back, and
+ * every plan reads what others already paid for before spending anything (see `choose`):
+ * results trickle down from Ultra to Pro to Free.
  *
  * Only the server writes it, from answers it fetched itself, so nothing a browser sends
  * can end up in someone else's result. server.mjs passes in a store kept in Postgres
@@ -56,12 +57,13 @@ export function libraryKind(): string {
   return store.kind;
 }
 
-const keyOf = (network: InsightXNetwork, address: string) => `${network}:${address.toLowerCase()}`;
+const keyOf = (network: InsightXNetwork, address: string, depth: Depth) => `${network}:${address.toLowerCase()}:${depth}`;
 
-/** The saved entry, or undefined when there is none or the store failed. */
-export async function readLibrary(network: InsightXNetwork, address: string): Promise<LibraryEntry | undefined> {
+export type Shelf = Partial<Record<Depth, LibraryEntry>>;
+
+async function readOne(network: InsightXNetwork, address: string, depth: Depth): Promise<LibraryEntry | undefined> {
   try {
-    const raw = await store.get(keyOf(network, address));
+    const raw = await store.get(keyOf(network, address, depth));
     if (!raw) return undefined;
     const entry = JSON.parse(raw) as LibraryEntry;
     return typeof entry.savedAt === 'number' && entry.bundle ? entry : undefined;
@@ -71,13 +73,52 @@ export async function readLibrary(network: InsightXNetwork, address: string): Pr
   }
 }
 
-/** Saves answers unless the library already holds newer ones. A store failure never fails a scan. */
-export async function writeLibrary(network: InsightXNetwork, address: string, entry: LibraryEntry): Promise<void> {
+/** The saved entries at each depth; missing when there is none or the store failed. */
+export async function readLibrary(network: InsightXNetwork, address: string): Promise<Shelf> {
+  const [pro, ultra] = await Promise.all([readOne(network, address, 'pro'), readOne(network, address, 'ultra')]);
+  return { ...(pro && { pro }), ...(ultra && { ultra }) };
+}
+
+/** Saves answers at their depth unless the library already holds newer ones. A store failure never fails a scan. */
+export async function writeLibrary(network: InsightXNetwork, address: string, depth: Depth, entry: LibraryEntry): Promise<void> {
   try {
-    const current = await readLibrary(network, address);
+    const current = await readOne(network, address, depth);
     if (current && current.savedAt > entry.savedAt) return;
-    await store.set(keyOf(network, address), JSON.stringify(entry));
+    await store.set(keyOf(network, address, depth), JSON.stringify(entry));
   } catch (error) {
     console.error('library write failed:', error instanceof Error ? error.message : error);
   }
+}
+
+/**
+ * Free prefers an Ultra result to a Pro one (it read more of X), unless the Pro one is
+ * this much newer: a week-old deep read says less than yesterday's standard one.
+ */
+export const ULTRA_PREFERRED_MS = 7 * 24 * 60 * 60_000;
+
+/** What a scan does for Community, given what the library holds. */
+export type Choice =
+  | { use: LibraryEntry; from: Depth }
+  | { expand: LibraryEntry }
+  | { fetch: true };
+
+/**
+ * The trickle-down rules.
+ * - Free: the saved Ultra result, else Pro, whatever its age (Ultra unless Pro is a week newer).
+ * - Pro: a saved Ultra or Pro result no older than `maxAgeSeconds`, Ultra first.
+ * - Ultra: a saved Ultra result no older than `maxAgeSeconds`; else read on from a Pro
+ *   result that young instead of starting again.
+ * Otherwise fetch at the plan's own depth. A re-check passes 0 and always fetches.
+ */
+export function choose(plan: Plan, shelf: Shelf, maxAgeSeconds: number, now = Date.now()): Choice {
+  const { pro, ultra } = shelf;
+  if (plan.community === 'library') {
+    if (ultra && (!pro || pro.savedAt - ultra.savedAt <= ULTRA_PREFERRED_MS)) return { use: ultra, from: 'ultra' };
+    if (pro) return { use: pro, from: 'pro' };
+    return { fetch: true };
+  }
+  const young = (entry?: LibraryEntry): entry is LibraryEntry => entry !== undefined && maxAgeSeconds > 0 && now - entry.savedAt <= maxAgeSeconds * 1000;
+  if (young(ultra)) return { use: ultra, from: 'ultra' };
+  if (young(pro)) return plan.depth === 'ultra' ? { expand: pro } : { use: pro, from: 'pro' };
+  return { fetch: true };
 }

@@ -11,6 +11,9 @@ export type PlanId = 'free' | 'pro' | 'ultra';
 
 export const PLAN_IDS: readonly PlanId[] = ['free', 'pro', 'ultra'];
 
+/** How deep a community check reads X: 'ultra' reads more than 'pro'. Free checks read at 'pro'. */
+export type Depth = 'pro' | 'ultra';
+
 /** How much of X a fresh community check reads. Each post costs $0.005, each account $0.010. */
 export interface XDepth {
   /** Recent posts mentioning the token, with their authors. */
@@ -41,6 +44,8 @@ export interface Plan {
   /** Oldest shared holder answer accepted, in seconds; undefined uses share.ts. */
   holdersMaxAge?: number;
   x: XDepth;
+  /** Which of the two depths `x` is; results are saved in the library under it. */
+  depth: Depth;
   /** Second-opinion security checks (Honeypot.is on EVM, RugCheck on Solana). */
   extraSecurity: boolean;
   /** Re-checks allowed per client in 10 minutes; 0 means no Re-check. */
@@ -69,6 +74,7 @@ export const PLANS: Readonly<Record<PlanId, Plan>> = {
     ],
     community: 'library',
     x: STANDARD_X,
+    depth: 'pro',
     extraSecurity: false,
     rechecks: 0,
     paidScansPerDay: 5,
@@ -86,6 +92,7 @@ export const PLANS: Readonly<Record<PlanId, Plan>> = {
     ],
     community: 'shared',
     x: STANDARD_X,
+    depth: 'pro',
     extraSecurity: false,
     rechecks: 5,
   },
@@ -105,6 +112,7 @@ export const PLANS: Readonly<Record<PlanId, Plan>> = {
     communityMaxAge: 6 * 60 * 60,
     holdersMaxAge: 10 * 60,
     x: { mentions: 30, ownPosts: 30, bioPeople: 10 },
+    depth: 'ultra',
     extraSecurity: true,
     rechecks: 10,
     paidScansPerDay: 20,
@@ -118,7 +126,7 @@ export function planFrom(value: unknown): Plan {
 
 /** Ultra past its daily deep scans: the same plan at Pro's depth, without the extras. */
 export function atProDepth(plan: Plan): Plan {
-  return { ...plan, x: PLANS.pro.x, extraSecurity: false, communityMaxAge: undefined, holdersMaxAge: undefined };
+  return { ...plan, x: PLANS.pro.x, depth: 'pro', extraSecurity: false, communityMaxAge: undefined, holdersMaxAge: undefined };
 }
 
 /** Worst-case X cost of one fresh community check, in dollars (every post by a new author). */
