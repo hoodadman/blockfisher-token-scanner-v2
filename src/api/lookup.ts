@@ -3,6 +3,7 @@ import {
   coingeckoContractUrl,
   exchangeIdsFromCoinGecko,
   goPlusChainId,
+  ownLinksOnly,
   tokenFromDexScreener,
   tokenFromGoPlus,
   twitterHandleFromDexScreener,
@@ -23,7 +24,7 @@ import { SHARE_HEADER, savedAt, shareSeconds } from './share';
 import { chatLinksFromDexScreener, fetchChatCounts } from './chats';
 import { BASIC_CHECK_MAX_COST, communityFromBundle, expandTwitterBundle, fetchBasicBundle, fetchTwitterBundle, TwitterError, type TwitterBundle } from './twitter';
 import { fetchSecondOpinion, worseOf, type SecondOpinion } from './secondOpinion';
-import { choose, readLibrary, writeLibrary } from '../plans/library';
+import { choose, readLibrary, writeLibrary, type LibraryEntry, type Shelf } from '../plans/library';
 import { PLANS, type Plan, type Source } from '../plans/plans';
 
 export interface Chain {
@@ -216,7 +217,9 @@ export async function lookupToken(
   if (found.length === 0) {
     throw new LookupError(listings.some((listing) => listing.status === 'rejected') ? 'unavailable' : 'not-found', chains);
   }
-  const { chain, pairs } = found.reduce((best, next) => (deepestPool(next.pairs) > deepestPool(best.pairs) ? next : best));
+  const best = found.reduce((best, next) => (deepestPool(next.pairs) > deepestPool(best.pairs) ? next : best));
+  const chain = best.chain;
+  const pairs = ownLinksOnly(best.pairs, address);
   const identity = tokenFromDexScreener(pairs, address);
   const twitter = twitterHandleFromDexScreener(pairs);
   const launchedAt = buildSignals(chain.network, { dexScreenerPairs: pairs }).launchedAt;
@@ -225,7 +228,7 @@ export async function lookupToken(
 
   // What others already paid for comes first (library.ts `choose`); a re-check always fetches.
   const communityAge = capped(shareSeconds('community', launchedAt, fresh), plan.communityMaxAge);
-  const shelf = options.library && !fresh ? await readLibrary(chain.network, address) : {};
+  const shelf = options.library && !fresh ? sameAccount(await readLibrary(chain.network, address), twitter) : {};
   const choice = choose(plan, shelf, communityAge);
   const who = { handle: twitter, name: identity.name, symbol: identity.symbol };
   let communitySource: TokenLookup['communitySource'];
@@ -326,6 +329,17 @@ export async function lookupToken(
     communityFrom,
     secondOpinion: secondOpinion?.opinion,
   };
+}
+
+/** Saved X answers count only if they were read from the account this token links to now. */
+function sameAccount(shelf: Shelf, handle: string | undefined): Shelf {
+  const wanted = handle?.toLowerCase();
+  const kept: Shelf = {};
+  for (const [source, entry] of Object.entries(shelf) as [Source, LibraryEntry][]) {
+    const read = entry.bundle.profile?.handle?.toLowerCase();
+    if (read === undefined || read === wanted) kept[source] = entry;
+  }
+  return kept;
 }
 
 function failureFrom(source: SourceFailure['source'], reason: unknown): SourceFailure {
