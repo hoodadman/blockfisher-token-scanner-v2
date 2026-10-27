@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildSignals,
   handleFromSocial,
+  ownLinksOnly,
   signalsFromDexScreener,
   signalsFromGoPlus,
   signalsFromInsightXDexMetrics,
@@ -24,8 +25,24 @@ describe('signalsFromDexScreener', () => {
 
   it('reads the first Twitter handle from a pair’s social links', () => {
     expect(handleFromSocial({ type: 'twitter', url: 'https://twitter.com/pepecoineth' })).toBe('pepecoineth');
-    expect(handleFromSocial({ type: 'x', url: 'https://x.com/bonk_inu/status/1' })).toBe('bonk_inu');
+    expect(handleFromSocial({ type: 'x', url: 'https://x.com/bonk_inu' })).toBe('bonk_inu');
+    // A post link names its writer, who is often a caller, not the project.
+    expect(handleFromSocial({ type: 'x', url: 'https://x.com/somecaller/status/1' })).toBeUndefined();
     expect(twitterHandleFromDexScreener([{ chainId: 'ethereum', info: { socials: [{ type: 'telegram', url: 'https://t.me/x' }] } }])).toBeUndefined();
+  });
+
+  it('drops links from pairs where the token is the second token', () => {
+    const usdt = '0xdAC17F958D2ee523a2206206994597C13D831ec7';
+    const pairs = ownLinksOnly(
+      [
+        { chainId: 'ethereum', baseToken: { address: '0x1111111111111111111111111111111111111111' }, quoteToken: { address: usdt }, liquidity: { usd: 5 }, info: { socials: [{ type: 'twitter', url: 'https://x.com/newcoin' }] } },
+        { chainId: 'ethereum', baseToken: { address: usdt.toLowerCase() }, liquidity: { usd: 9 }, info: { socials: [{ type: 'twitter', url: 'https://x.com/tether' }] } },
+      ],
+      usdt,
+    );
+    expect(twitterHandleFromDexScreener(pairs)).toBe('tether');
+    expect(signalsFromDexScreener(pairs).liquidityUsd).toBe(9);
+    expect(twitterHandleFromDexScreener(pairs.slice(0, 1))).toBeUndefined();
   });
 
   it('collects website links from DexScreener info', () => {

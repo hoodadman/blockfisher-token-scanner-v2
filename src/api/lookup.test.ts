@@ -250,6 +250,19 @@ describe('lookupToken on each plan', () => {
     expect(calls.some((url) => url.includes('/token_security/'))).toBe(true);
   });
 
+  it('ignores saved X answers read from an account the token no longer links to', async () => {
+    const { PLANS } = await import('../plans/plans');
+    const { setLibraryStore, memoryLibrary, writeLibrary } = await import('../plans/library');
+    setLibraryStore(memoryLibrary());
+    const calls: string[] = [];
+    vi.stubGlobal('fetch', routes(calls));
+    const profile = { id: '9', handle: 'someoneelse', followers: 1_000_000, urls: [], mentions: [] };
+    await writeLibrary('eth', EVM, 'pro', { savedAt: Date.now(), plan: 'pro', bundle: { profile, tweets: [], mentionedPeople: [], mentions: [] } });
+
+    const free = await lookupToken(EVM, undefined, 'eth', {}, false, { plan: PLANS.free, library: true, mayCheckBasic: async () => false });
+    expect(free.communitySource).toBe('skipped');
+  });
+
   it('Free skips Community on a token nobody has scanned when today\'s limits say no, without calling X', async () => {
     const { PLANS } = await import('../plans/plans');
     const { setLibraryStore, memoryLibrary } = await import('../plans/library');

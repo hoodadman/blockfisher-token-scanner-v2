@@ -43,6 +43,16 @@ export function signalsFromDexScreener(pairs: readonly DexScreenerPair[]): Parti
   });
 }
 
+/**
+ * DexScreener puts a pair's links (X, website, Telegram) on the pair's main token. When our
+ * token is the other side, such as USDT in a NEWCOIN/USDT pair, those links belong to
+ * NEWCOIN, so they are dropped here. Liquidity and age still count from every pair.
+ */
+export function ownLinksOnly(pairs: readonly DexScreenerPair[], address: string): DexScreenerPair[] {
+  const wanted = address.toLowerCase();
+  return pairs.map((pair) => (pair.baseToken?.address?.toLowerCase() === wanted ? pair : { ...pair, info: null }));
+}
+
 /** A token can be either side of a pair, so match on its address. */
 export function tokenFromDexScreener(pairs: readonly DexScreenerPair[], address: string): { name?: string; symbol?: string } {
   const wanted = address.toLowerCase();
@@ -90,7 +100,10 @@ export function handleFromUrl(url: string | undefined): string | undefined {
   try {
     const parsed = new URL(url);
     if (!/^(www\.)?(twitter|x)\.com$/i.test(parsed.hostname)) return undefined;
-    const [first] = parsed.pathname.split('/').filter(Boolean);
+    const [first, second] = parsed.pathname.split('/').filter(Boolean);
+    // A link to a post (x.com/<who>/status/<id>) names whoever wrote it, often a caller
+    // promoting the token rather than the project itself.
+    if (second?.toLowerCase() === 'status') return undefined;
     if (!first || ['i', 'intent', 'share', 'search', 'home'].includes(first.toLowerCase())) return undefined;
     const handle = first.replace(/^@/, '');
     return HANDLE.test(handle) ? handle : undefined;
