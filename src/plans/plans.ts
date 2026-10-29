@@ -92,7 +92,7 @@ export const PLANS: Readonly<Record<PlanId, Plan>> = {
   pro: {
     id: 'pro',
     name: 'Pro',
-    monthlyPrice: 7.99,
+    monthlyPrice: 9.99,
     tagline: 'Up-to-date community checks and Re-check.',
     features: [
       'Everything in Free',
