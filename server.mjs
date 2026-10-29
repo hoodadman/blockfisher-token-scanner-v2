@@ -7,7 +7,7 @@ import { readFile, stat } from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { openLibrary, openStore, sharedFetch } from "./shared-store.mjs";
+import { openAccounts, openLibrary, openStore, sharedFetch } from "./shared-store.mjs";
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const DIST = path.join(ROOT, "dist");
@@ -101,11 +101,23 @@ function corsHeaders(req) {
   if (!allowed) return {};
   return {
     "access-control-allow-origin": origin,
-    "access-control-allow-methods": "POST, OPTIONS",
-    "access-control-allow-headers": "content-type",
+    "access-control-allow-methods": "GET, POST, OPTIONS",
+    "access-control-allow-headers": "content-type, authorization",
     "access-control-max-age": "600",
     vary: "origin",
   };
+}
+
+/** The account access key, sent as "Authorization: Bearer bf_...". */
+function keyOf(req) {
+  const match = String(req.headers.authorization || "").match(/^Bearer\s+(bf_[A-Za-z0-9_-]+)$/);
+  return match ? match[1] : undefined;
+}
+
+/** PAID_PLANS: "off" runs every scan as Free, "billing" uses paid accounts, anything else is the mock Scanner Pro. */
+function paidPlansMode() {
+  const value = process.env.PAID_PLANS?.trim();
+  return value === "off" || value === "billing" ? value : "open";
 }
 
 function clientOf(req) {
@@ -128,12 +140,18 @@ async function loadExtensionApi() {
       },
       {
         library: await libraryReady,
-        // PAID_PLANS=off runs every scan as Free; anything else is the mock Scanner Pro.
-        paidPlans: process.env.PAID_PLANS?.trim() === "off" ? "off" : "open",
+        paidPlans: paidPlansMode(),
         // Dollars a day, shared by all Free users, for basic community checks. Security isn't capped.
         freeBudget: Number(process.env.FREE_COMMUNITY_BUDGET) > 0 ? Number(process.env.FREE_COMMUNITY_BUDGET) : undefined,
       },
     );
+    const stripeKey = process.env.STRIPE_SECRET_KEY?.trim();
+    api.configureBilling({
+      accounts: await accountsReady,
+      stripe: stripeKey ? { secretKey: stripeKey, webhookSecret: process.env.STRIPE_WEBHOOK_SECRET?.trim() || undefined } : undefined,
+      publicUrl: process.env.PUBLIC_URL?.trim() || undefined,
+      enabled: paidPlansMode() === "billing",
+    });
     extensionApi = api;
   }
   return extensionApi;
@@ -165,7 +183,8 @@ async function health(res) {
   );
   report.sharedStore = (await storeReady).kind;
   report.library = extensionApi ? extensionApi.libraryStoreKind() : "not loaded";
-  report.paidPlans = process.env.PAID_PLANS?.trim() === "off" ? "off" : "open (mock)";
+  report.paidPlans = { off: "off", billing: "billing", open: "open (mock)" }[paidPlansMode()];
+  if (extensionApi) report.billing = extensionApi.billingHealth();
   if (extensionApi) report.freeCommunityBudget = await extensionApi.freeBudgetToday();
   report.keys = {
     insightx: Boolean(process.env.INSIGHTX_API_KEY?.trim()),
@@ -194,7 +213,7 @@ async function extensionRoute(req, res, pathname) {
     return;
   }
   const api = await loadExtensionApi();
-  const reply = pathname === "/api/scan" ? await api.handleScan(body, clientOf(req)) : await api.handleIdentify(body, clientOf(req));
+  const reply = pathname === "/api/scan" ? await api.handleScan(body, clientOf(req), keyOf(req)) : await api.handleIdentify(body, clientOf(req));
   sendJson(res, reply.status, reply.body, cors);
 }
 
@@ -216,10 +235,78 @@ function readBody(req, limit = 100_000) {
   });
 }
 
+/** Billing and account endpoints (src/server/billing.ts). The webhook reads the raw body for its signature. */
+async function billingRoute(req, res, pathname) {
+  const cors = corsHeaders(req);
+  if (req.method === "OPTIONS") {
+    res.writeHead(204, cors);
+    res.end();
+    return;
+  }
+  const api = await loadExtensionApi();
+  const key = keyOf(req);
+  if (req.method === "GET") {
+    if (pathname === "/api/billing/config") return sendJson(res, 200, api.handleBillingConfig().body, cors);
+    if (pathname === "/api/account") {
+      const reply = await api.handleAccount(key);
+      return sendJson(res, reply.status, reply.body, cors);
+    }
+    return sendJson(res, 405, { ok: false, text: "Use POST." }, cors);
+  }
+  if (req.method !== "POST") return sendJson(res, 405, { ok: false, text: "Use POST." }, cors);
+  let raw;
+  try {
+    raw = (await readBody(req, 100_000)).toString("utf8");
+  } catch {
+    return sendJson(res, 413, { ok: false, text: "Too large." }, cors);
+  }
+  if (pathname === "/api/billing/webhook") {
+    const reply = await api.handleWebhook(raw, req.headers["stripe-signature"]);
+    return sendJson(res, reply.status, reply.body);
+  }
+  let body;
+  try {
+    body = JSON.parse(raw || "{}");
+  } catch {
+    return sendJson(res, 400, { ok: false, text: "Send a JSON body." }, cors);
+  }
+  if (pathname === "/api/account/signin" && signInLimit(clientOf(req))) {
+    return sendJson(res, 429, { ok: false, text: "Too many sign-in emails. Try again later." }, cors);
+  }
+  const handlers = {
+    "/api/billing/checkout": () => api.handleCheckout(body, key),
+    "/api/billing/claim": () => api.handleClaim(body),
+    "/api/account/signin": () => api.handleSignIn(body),
+    "/api/account/redeem": () => api.handleRedeem(body),
+    "/api/account/portal": () => api.handlePortal(key),
+    "/api/account/signout": () => api.handleSignOut(key),
+  };
+  const handler = handlers[pathname];
+  if (!handler) return sendJson(res, 404, { ok: false, text: "Not found." }, cors);
+  const reply = await handler();
+  sendJson(res, reply.status, reply.body, cors);
+}
+
+/** At most 5 sign-in emails per address in 15 minutes, so the form can't be used to spam inboxes. */
+const signIns = new Map();
+function signInLimit(client) {
+  const now = Date.now();
+  const window = signIns.get(client);
+  if (!window || window.resets <= now) {
+    if (signIns.size > 10_000) signIns.clear();
+    signIns.set(client, { count: 1, resets: now + 15 * 60_000 });
+    return false;
+  }
+  window.count += 1;
+  return window.count > 5;
+}
+
 /** Paid answers shared between everyone scanning the same token. See shared-store.mjs. */
 const storeReady = openStore();
 /** The scan library Free scans read Community from. See src/plans/library.ts. */
 const libraryReady = storeReady.then((store) => openLibrary(store));
+/** Accounts: Postgres, else Redis, else memory (src/billing/accounts.ts). */
+const accountsReady = openAccounts();
 
 /** How old a shared answer the caller accepts (x-share-seconds), capped at what we keep. */
 function shareSeconds(req, route) {
@@ -382,6 +469,10 @@ const server = http.createServer(async (req, res) => {
       const api = await loadExtensionApi();
       const reply = await api.handleSocials(new URL(req.url || "/", "http://localhost").searchParams, clientOf(req));
       sendJson(res, reply.status, reply.body);
+      return;
+    }
+    if (pathname.startsWith("/api/billing/") || pathname === "/api/account" || pathname.startsWith("/api/account/")) {
+      await billingRoute(req, res, pathname);
       return;
     }
     if (pathname === "/api/scan" || pathname === "/api/identify") {

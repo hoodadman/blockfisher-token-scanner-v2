@@ -80,9 +80,34 @@ Second-opinion findings can only make a result worse: each signal keeps the wors
 
 A Re-check skips the library. Every check that paid for X writes back at its depth, so results trickle down from Ultra to Pro to Free. The report says which (`communitySource`: `fetched`, `library`, `expanded` or `skipped`; `communityFrom`: `pro` or `ultra`). Only the server writes the library, from answers it fetched itself. It lives in Postgres when `DATABASE_URL` is set (table `scan_library`, created on start), else in the shared store's Redis with no expiry, else in memory. `/api/health` shows which (`library`).
 
-**Billing doesn't exist yet**: this is the mock Scanner Pro, and each request says its own plan. Limits are per client IP until there are accounts. Set `PAID_PLANS=off` to run every scan as Free.
+Prices: Free £0, Pro £9.99 a month, Ultra £24.99 a month. `PAID_PLANS` decides how a scan's plan is chosen:
 
-The website shows a plan picker above the search box, saved in the browser, and now scans through `/api/scan` like the extension: the browser finds the token on DexScreener and sends the pairs.
+- unset: the mock Scanner Pro. Each request says its own plan and gets it. Limits are per client IP.
+- `off`: every scan runs as Free.
+- `billing`: each scan runs on the plan its account pays for (see Billing). No key, or a plan that has ended: Free. A request may ask for a lower plan than it pays for, never a higher one. Paid limits count per account.
+
+The website shows the three plans above the search box. With paid plans open (`billing` and a Stripe key), picking Pro or Ultra opens the checkout; otherwise the picker is the preview, saved in the browser. It scans through `/api/scan` like the extension: the browser finds the token on DexScreener and sends the pairs.
+
+## Billing
+
+Payments go through Stripe Checkout as a monthly subscription; accounts are made by the first checkout (Free needs none). The code is in `src/billing/` and `src/server/billing.ts`.
+
+**Packages.** Each scanner is its own monthly product at £9.99 (the token scanner at its plan's price). The discount grows with each extra scanner in one package: 10% on the second, 20% on the third, 30% on the fourth (2 scanners £18.98, 3 £26.97, 4 £33.96). The dearest scanner is charged in full. The checkout lists every scanner with a tick box and shows each one's price and discount ("£8.99, 10% discount") and the total. Scanners that haven't launched show "Coming later" and can't be ticked: flip `launched` in `src/billing/catalog.ts` when one goes live. The portfolio scanner is priced on its own and isn't in the package. Prices are sent with each checkout, so no products need setting up in Stripe.
+
+**Access keys.** After paying, Stripe sends the buyer back to `/?session_id=…`, which swaps the checkout for an access key (`bf_…`) once. The browser keeps it and sends it as `Authorization: Bearer bf_…`. On another browser, "Already paid? Sign in" emails a one-time link (30 minutes). "Copy key for the extension" gives the key to paste into the extension's settings. Only hashes of keys are stored; each account keeps its 10 newest keys. "Manage billing" opens Stripe's customer portal (change card, invoices, cancel). An account that already pays is sent there rather than to a second checkout.
+
+**Endpoints.** `GET /api/billing/config`, `POST /api/billing/checkout {scanners, tier, email}`, `POST /api/billing/claim {sessionId}`, `POST /api/billing/webhook` (Stripe only, signed), `GET /api/account`, `POST /api/account/signin {email}` (5 per IP per 15 minutes; same answer whether or not the email has an account), `POST /api/account/redeem {token}`, `POST /api/account/portal`, `POST /api/account/signout`.
+
+**Setting it up.**
+
+1. In Stripe (test mode first), copy the secret key into `STRIPE_SECRET_KEY`.
+2. Add a webhook endpoint at `https://<this service>/api/billing/webhook` for `checkout.session.completed`, `customer.subscription.updated` and `customer.subscription.deleted`, and copy its signing secret into `STRIPE_WEBHOOK_SECRET`.
+3. Turn on the customer portal in Stripe's settings (Billing → Customer portal).
+4. Set `PUBLIC_URL` to this service's address, and `DATABASE_URL` so accounts survive restarts (`/api/health` shows `billing.accounts`; `memory` loses every account on restart).
+5. For sign-in emails, set `RESEND_API_KEY` and `MAIL_FROM` (an address on a domain verified with Resend). Without them the link is only written to the server log.
+6. Set `PAID_PLANS=billing`. `/api/health` shows `billing.checkout: true` once it is open.
+
+Not built yet: changing a package after buying (cancel and buy again for now), VAT on invoices, and fair-use limits on Pro.
 
 ## GET /api/socials
 
@@ -99,9 +124,12 @@ The website shows a plan picker above the search box, saved in the browser, and 
 | --- | --- |
 | `EXTENSION_ORIGINS` | Comma-separated `chrome-extension://<id>` origins allowed to call these endpoints. Set it to the published extension's id. When unset, any extension may call them (handy while testing an unpacked build). |
 | `INSIGHTX_API_KEY`, `TWITTER_BEARER_TOKEN`, `OPENAI_API_KEY` | Same keys the website already uses. The extension never sees them. |
-| `DATABASE_URL` | Postgres for the scan library (Render Postgres "Internal Database URL"). Optional; see Plans. |
+| `DATABASE_URL` | Postgres for the scan library and accounts (Render Postgres "Internal Database URL"; tables `scan_library` and `accounts_store`, created on start). Needed for billing; see Plans and Billing. Without it accounts fall back to `REDIS_URL`, which an `allkeys-lru` Key Value can evict, so use Postgres for real payments. |
 | `FREE_COMMUNITY_BUDGET` | Dollars a day, shared by all Free users, for basic community checks. Default 10. Security isn't capped. |
-| `PAID_PLANS` | `off` runs every scan as Free. Unset: each request picks its plan (the mock Scanner Pro). |
+| `PAID_PLANS` | `off` runs every scan as Free. `billing` runs each scan on the plan its account pays for. Unset: each request picks its plan (the mock Scanner Pro). |
+| `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET` | Stripe's secret key and the webhook's signing secret. See Billing. |
+| `PUBLIC_URL` | This service's public address, for Stripe's return links and sign-in links. |
+| `RESEND_API_KEY`, `MAIL_FROM` | Send sign-in links by email through Resend. Optional. |
 | `REDIS_URL` | Where shared answers are kept: the Internal URL of a Render Key Value instance (`redis://red-…:6379`). Unset or unreachable, the server keeps them in memory instead, which works the same but empties on every restart or deploy. `/api/health` shows which (`sharedStore`). |
 
 ## Hosting on Render

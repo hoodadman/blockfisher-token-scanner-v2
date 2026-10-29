@@ -1,4 +1,5 @@
 import type { DexScreenerPair } from '../adapters';
+import { authHeaders } from '../billing/client';
 import type { PlanId } from '../plans/plans';
 import { LookupError, chainsFor, type Chain } from './lookup';
 import type { ScanReport } from './scan';
@@ -36,11 +37,12 @@ async function findListing(address: string, signal?: AbortSignal): Promise<{ cha
 /** A scan the server turned down (a limit, or Re-check on Free), with its message. */
 export class ScanRefused extends Error {}
 
-export async function scanOnServer(address: string, plan: PlanId, refresh = false, signal?: AbortSignal): Promise<ScanReport> {
+/** Without a plan (paid plans open), the server runs the plan the signed-in account pays for. */
+export async function scanOnServer(address: string, plan: PlanId | undefined, refresh = false, signal?: AbortSignal): Promise<ScanReport> {
   const { chain, pairs } = await findListing(address.trim(), signal);
   const response = await fetch('/api/scan', {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', ...authHeaders() },
     body: JSON.stringify({ address: address.trim(), network: chain.network, pairs, plan, refresh }),
     signal,
   });

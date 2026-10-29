@@ -1,0 +1,189 @@
+.checkout,
+.account {
+  margin: 1rem 0 1.5rem;
+  padding: 1.1rem 1.15rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--bg-raised);
+}
+
+.checkout h3 {
+  margin: 0 0 0.7rem;
+  font-family: var(--serif);
+  font-size: 1.15rem;
+  font-weight: 600;
+}
+
+.checkout__list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.checkout__item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem 0.8rem;
+  padding: 0.6rem 0;
+  border-top: 1px solid var(--line);
+}
+
+.checkout__item:first-child {
+  border-top: 0;
+}
+
+.checkout__item label {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  cursor: pointer;
+}
+
+.checkout__item--later {
+  color: var(--muted);
+}
+
+.checkout__item--later label {
+  cursor: default;
+}
+
+.checkout__name {
+  font-weight: 600;
+}
+
+.checkout__tiers {
+  display: inline-flex;
+  gap: 0.3rem;
+}
+
+.checkout__tier {
+  font: inherit;
+  font-size: 0.85rem;
+  padding: 0.15rem 0.6rem;
+  color: var(--text);
+  background: var(--bg-sink);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.checkout__tier--on {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.checkout__price {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+}
+
+.checkout__note,
+.checkout__saving {
+  margin: 0.6rem 0 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.checkout__total {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin: 0.9rem 0 0;
+  padding-top: 0.7rem;
+  border-top: 1px solid var(--line);
+}
+
+.checkout__total strong {
+  font-family: var(--serif);
+  font-size: 1.35rem;
+}
+
+.checkout__per {
+  font-family: var(--sans);
+  font-size: 0.9rem;
+  font-weight: 400;
+  color: var(--muted);
+}
+
+.checkout__email,
+.account label {
+  display: grid;
+  gap: 0.3rem;
+  margin-top: 0.9rem;
+  font-size: 0.92rem;
+}
+
+.checkout input[type='email'],
+.account input[type='email'] {
+  font: inherit;
+  padding: 0.5rem 0.7rem;
+  color: var(--text);
+  background: var(--bg-sink);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+
+.checkout__pay,
+.account button {
+  font: inherit;
+  font-weight: 600;
+  padding: 0.55rem 1rem;
+  color: var(--accent-ink);
+  background: var(--accent);
+  border: 0;
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.checkout__pay {
+  margin-top: 0.9rem;
+}
+
+.checkout__pay:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.checkout__message {
+  margin: 0.6rem 0 0;
+  color: var(--danger);
+}
+
+.account p {
+  margin: 0;
+}
+
+.account label {
+  margin-top: 0;
+}
+
+.account__row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.account__row input {
+  flex: 1 1 14rem;
+}
+
+.account__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.7rem;
+}
+
+.account__actions button {
+  color: var(--text);
+  background: var(--bg-sink);
+  border: 1px solid var(--line);
+}
+
+.account [role='status'],
+.account [role='alert'] {
+  margin-top: 0.6rem;
+  color: var(--muted);
+  font-size: 0.92rem;
+}

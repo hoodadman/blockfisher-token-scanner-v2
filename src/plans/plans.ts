@@ -4,8 +4,9 @@
  * which extra security checks run, and the limits. Nothing else in the code checks a plan
  * by name.
  *
- * Billing doesn't exist yet: this is the mock "Scanner Pro". The caller says which plan it
- * is on (see server/api.ts and PAID_PLANS in docs/extension-api.md).
+ * Which plan a scan runs on is decided in server/api.ts: the account's paid plan with
+ * PAID_PLANS=billing (see src/billing/), else the plan the caller asks for (the mock
+ * "Scanner Pro"). See PAID_PLANS in docs/extension-api.md.
  */
 export type PlanId = 'free' | 'pro' | 'ultra';
 

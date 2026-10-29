@@ -1,8 +1,12 @@
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { ScanRefused, scanOnServer } from './api/client';
 import { LookupError, isTokenAddress } from './api/lookup';
 import type { ScanReport } from './api/scan';
+import { AccountBar, Checkout } from './components/Checkout';
 import { PlanPicker } from './components/PlanPicker';
+import type { AccountView } from './billing/accounts';
+import type { TokenTier } from './billing/catalog';
+import { billingConfig, claimCheckout, currentAccount, redeemSignIn, type BillingConfig } from './billing/client';
 import { ScoreBrief } from './components/ScoreBrief';
 import { ScorePanel } from './components/ScorePanel';
 import { ScoreTriangle } from './components/ScoreTriangle';
@@ -38,6 +42,29 @@ export function App() {
   const [view, setView] = useState<View>({ status: 'idle' });
   const [plan, setPlan] = useState<PlanId>(savedPlan);
   const inFlight = useRef<AbortController | null>(null);
+  const [billing, setBilling] = useState<BillingConfig>();
+  const [account, setAccount] = useState<AccountView>();
+  const [tier, setTier] = useState<TokenTier>('pro');
+  // Checkout opens once Pro or Ultra is picked, so it doesn't sit between the visitor and the scan box.
+  const [shopping, setShopping] = useState(false);
+  const [banner, setBanner] = useState<string>();
+  const buying = billing?.checkout === true;
+
+  useEffect(() => {
+    void (async () => {
+      setBilling(await billingConfig());
+      // Back from Stripe, or from the emailed sign-in link: swap it for an access key.
+      const params = new URLSearchParams(location.search);
+      const sessionId = params.get('session_id');
+      const signin = params.get('signin');
+      const signedIn = sessionId ? await claimCheckout(sessionId) : signin ? await redeemSignIn(signin) : undefined;
+      if (params.get('checkout') === 'cancelled') setBanner('Checkout cancelled. Nothing was charged.');
+      if (typeof signedIn === 'string') setBanner(signedIn);
+      else if (signedIn) setBanner(sessionId ? 'Thank you. Your plan is active on this browser.' : 'Signed in.');
+      if (sessionId || signin || params.has('checkout')) history.replaceState(null, '', location.pathname);
+      setAccount(typeof signedIn === 'object' ? signedIn : await currentAccount().catch(() => undefined));
+    })();
+  }, []);
 
   function choosePlan(next: PlanId) {
     setPlan(next);
@@ -59,7 +86,7 @@ export function App() {
     inFlight.current = controller;
     setView({ status: 'loading' });
     try {
-      const report = await scanOnServer(address, plan, refresh, controller.signal);
+      const report = await scanOnServer(address, buying ? undefined : plan, refresh, controller.signal);
       if (controller.signal.aborted) return;
       setView({ status: 'done', report });
     } catch (error) {
@@ -92,7 +119,25 @@ export function App() {
         <p className="lede">Paste a token address. The scan shows what it found, then a short brief.</p>
       </header>
 
-      <PlanPicker plan={plan} onChange={choosePlan} />
+      {banner && (
+        <p className="notice" role="status">
+          {banner}
+        </p>
+      )}
+      {buying ? (
+        <>
+          <PlanPicker mode="buy" plan={tier} current={account?.plan ?? 'free'} onChange={(next) => {
+              if (next === 'free') return;
+              setTier(next);
+              setShopping(true);
+            }}
+          />
+          <AccountBar account={account} onSignedOut={() => setAccount(undefined)} />
+          {shopping && !account?.paying && <Checkout tier={tier} onTier={setTier} />}
+        </>
+      ) : (
+        <PlanPicker plan={plan} onChange={choosePlan} />
+      )}
 
       <TokenSearch onSearch={(address) => check(address)} error={view.status === 'error' ? view.message : undefined} />
 
