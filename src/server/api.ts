@@ -11,7 +11,23 @@ import { scanErrorText, scanReport, scanText, type ScanReport } from '../api/sca
 import { parsePrefetched } from './prefetched';
 import { DailyBudget } from '../plans/budget';
 import { libraryKind, libraryStore, setLibraryStore, type LibraryStore } from '../plans/library';
-import { PLANS, atProDepth, planFrom, type Plan, type PlanId } from '../plans/plans';
+import { PLANS, PLAN_IDS, atProDepth, planFrom, type Plan, type PlanId } from '../plans/plans';
+import { planOf } from '../billing/accounts';
+import { accountsFor } from './billing';
+
+export {
+  billingHealth,
+  configureBilling,
+  handleAccount,
+  handleBillingConfig,
+  handleCheckout,
+  handleClaim,
+  handlePortal,
+  handleRedeem,
+  handleSignIn,
+  handleSignOut,
+  handleWebhook,
+} from './billing';
 
 export interface ApiReply {
   status: number;
@@ -110,8 +126,10 @@ let freeBudget = new DailyBudget(FREE_COMMUNITY_BUDGET, libraryStore);
 /**
  * 'open' (the mock Scanner Pro): each request says its plan and gets it.
  * 'off': every request runs as Free, whatever it asks for.
+ * 'billing': each request runs on the plan its account pays for (see server/billing.ts);
+ * without an account key, Free. A request may ask for a lower plan than it pays for.
  */
-export type PaidPlans = 'open' | 'off';
+export type PaidPlans = 'open' | 'off' | 'billing';
 let paidPlans: PaidPlans = 'open';
 
 export function configure(
@@ -147,14 +165,28 @@ const tooMany = (seconds: number): ApiReply => ({
   body: { ok: false, text: `Too many scans at once. Try again in ${Math.max(1, Math.ceil(seconds / 60))} minute(s).` },
 });
 
-export async function handleScan(body: unknown, client: string): Promise<ApiReply> {
+/** The plan a scan runs on, and who its limits count against. */
+async function planForRequest(asked: unknown, client: string, accessKey: string | undefined): Promise<{ plan: Plan; client: string }> {
+  if (paidPlans === 'off') return { plan: PLANS.free, client };
+  if (paidPlans === 'open') return { plan: planFrom(asked), client };
+  const account = await accountsFor().byKey(accessKey);
+  const paid = planOf(account);
+  const wanted = typeof asked === 'string' && (PLAN_IDS as readonly string[]).includes(asked) ? (asked as PlanId) : paid;
+  const plan = PLAN_IDS.indexOf(wanted) < PLAN_IDS.indexOf(paid) ? wanted : paid;
+  // Paid limits follow the account, not the address, so they can't be dodged or shared out.
+  return { plan: PLANS[plan], client: account && plan !== 'free' ? `account:${account.id}` : client };
+}
+
+export async function handleScan(body: unknown, requestClient: string, accessKey?: string): Promise<ApiReply> {
   const raw = (body ?? {}) as { address?: unknown; network?: unknown; refresh?: unknown; plan?: unknown };
   const refresh = raw.refresh === true;
   const address = typeof raw.address === 'string' ? raw.address.trim() : '';
   const network = typeof raw.network === 'string' && (NETWORKS as readonly string[]).includes(raw.network) ? (raw.network as InsightXNetwork) : undefined;
   if (!address) return { status: 400, body: { ok: false, text: 'Send a contract address to scan.' } };
   if (!isTokenAddress(address)) return { status: 422, body: { ok: false, text: scanErrorText(new LookupError('invalid')) } };
-  let plan = paidPlans === 'off' ? PLANS.free : planFrom(raw.plan);
+  const chosen = await planForRequest(raw.plan, requestClient, accessKey);
+  let plan = chosen.plan;
+  const client = chosen.client;
   if (refresh && plan.rechecks === 0) {
     return { status: 403, body: { ok: false, text: 'Re-check is part of Scanner Pro. Free scans use the latest saved community check.' } };
   }
