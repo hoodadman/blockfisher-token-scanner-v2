@@ -86,13 +86,13 @@ export const CHECKS: readonly CheckDefinition[] = [
           details: tooltipFor('honeypot'),
         }],
       ]),
-    ifUnknown: {
+    ifUnknown: (s) => ({
       severity: 'warning',
       points: 30,
-      title: 'Sell test couldn’t run',
+      title: s.chain === 'solana' ? 'We can’t test selling on Solana yet' : 'Sell test couldn’t run',
       summary: 'We couldn’t confirm that this token can be sold.',
       details: tooltipFor('honeypot'),
-    },
+    }),
   },
   {
     id: 'canTakeTokens',
@@ -433,20 +433,8 @@ export const CHECKS: readonly CheckDefinition[] = [
     passLabel: 'Healthy trading pool',
     category: 'market',
     measure: (s) => dollars(s.liquidityUsd ?? 0),
-    evaluate: (s, now) => {
-      // Pools still on a launchpad (such as pump.fun) report no size. On a token this new,
-      // not knowing is a risk in itself.
-      const hours = ageInHours(s, now);
-      if (s.liquidityUsd === undefined && hours !== undefined && hours < 7 * 24) {
-        return {
-          severity: 'warning',
-          points: 20,
-          title: 'Trading pool size unknown',
-          summary: 'This token is new and we couldn’t see how much is available for trading.',
-          details: tooltipFor('liquidity'),
-        };
-      }
-      return below(s.liquidityUsd, [
+    evaluate: (s) =>
+      below(s.liquidityUsd, [
         [10_000, {
           severity: 'warning',
           points: 20,
@@ -461,7 +449,15 @@ export const CHECKS: readonly CheckDefinition[] = [
           summary: 'Only {value} is available for trading.',
           details: tooltipFor('liquidity'),
         }],
-      ]);
+      ]),
+    // Pools still on a launchpad (such as pump.fun) report no size. At any age, not knowing
+    // whether there is money to sell into is a risk in itself.
+    ifUnknown: {
+      severity: 'warning',
+      points: 20,
+      title: 'Trading pool size unknown',
+      summary: 'We couldn’t see how much is available for trading.',
+      details: tooltipFor('liquidity'),
     },
   },
   {
@@ -487,6 +483,13 @@ export const CHECKS: readonly CheckDefinition[] = [
           details: tooltipFor('tokenAge'),
         }],
       ]),
+    ifUnknown: {
+      severity: 'minor',
+      points: 5,
+      title: 'Start date unknown',
+      summary: 'We don’t know when it started trading.',
+      details: tooltipFor('tokenAge'),
+    },
   },
   {
     id: 'socials',

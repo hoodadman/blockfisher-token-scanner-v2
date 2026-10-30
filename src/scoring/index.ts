@@ -1,6 +1,6 @@
 export { scoreToken, totalDeduction, BANDS, SEVERITY_CAPS, STACKING_RATES, MIN_COVERAGE } from './score';
 export type { ScoreOptions } from './score';
-export { averageScore, toneFor } from './overall';
+export { averageScore, overallScore, toneFor } from './overall';
 export type { ScoreTone } from './overall';
 export { groupSecurity, SECURITY_GROUPS } from './groups';
 export type { GroupedCheck } from './groups';

@@ -61,4 +61,13 @@ describe('groupSecurity', () => {
     expect(pool?.status).toBe('issue');
     expect(pool?.severity).toBe('warning');
   });
+
+  it('does not pass a group when some of its checks didn’t run', () => {
+    // GoPlus answered everything except "owner can change balance".
+    const groups = groupSecurity(scoreToken({ ...cleanEvm, canTakeTokens: undefined }, { now: NOW }));
+    const seize = groups.find((group) => group.id === 'seize');
+    expect(seize?.status).toBe('unknown');
+    expect(seize?.label).toBe('Taking your tokens');
+    expect(seize?.summary).toBe('We checked 2 of 3 things here; owner can change balance couldn’t be checked.');
+  });
 });

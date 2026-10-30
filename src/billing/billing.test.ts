@@ -128,7 +128,7 @@ describe('billing endpoints', () => {
     const body = JSON.stringify({
       id: 'evt_1',
       type: 'checkout.session.completed',
-      data: { object: { id: sessionId, mode: 'subscription', customer: 'cus_9', subscription: 'sub_9', customer_details: { email: 'pat@example.com' }, metadata: { scanners: 'token', tier: 'pro' } } },
+      data: { object: { id: sessionId, mode: 'subscription', payment_status: 'paid', customer: 'cus_9', subscription: 'sub_9', customer_details: { email: 'pat@example.com' }, metadata: { scanners: 'token', tier: 'pro' } } },
     });
     return handleWebhook(body, await signWebhook(body, secret));
   }
@@ -158,6 +158,35 @@ describe('billing endpoints', () => {
     expect(await handleAccount(key)).toMatchObject({ status: 200, body: { account: { email: 'pat@example.com', plan: 'pro', paying: true } } });
     expect((await handleClaim({ sessionId: 'cs_test_1' })).status).toBe(409);
     expect((await handleCheckout({ scanners: ['token'] }, key)).status).toBe(409);
+  });
+
+  it('does not give a plan for a checkout that is complete but not yet paid', async () => {
+    setUp();
+    const body = JSON.stringify({
+      id: 'evt_2',
+      type: 'checkout.session.completed',
+      data: { object: { id: 'cs_test_2', mode: 'subscription', payment_status: 'unpaid', customer: 'cus_2', customer_details: { email: 'sam@example.com' }, metadata: { scanners: 'token', tier: 'pro' } } },
+    });
+    expect((await handleWebhook(body, await signWebhook(body, secret))).status).toBe(200);
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ id: 'cs_test_2', status: 'complete', payment_status: 'unpaid' }))));
+    expect((await handleClaim({ sessionId: 'cs_test_2' })).status).toBe(404);
+  });
+
+  it('asks Stripe to retry a subscription event for an account it doesn’t know', async () => {
+    setUp();
+    const body = JSON.stringify({
+      id: 'evt_3',
+      type: 'customer.subscription.updated',
+      data: { object: { id: 'sub_404', customer: 'cus_404', status: 'active', metadata: { scanners: 'token', tier: 'pro' } } },
+    });
+    expect((await handleWebhook(body, await signWebhook(body, secret))).status).toBe(500);
+    await completeCheckout();
+    const known = JSON.stringify({
+      id: 'evt_4',
+      type: 'customer.subscription.updated',
+      data: { object: { id: 'sub_9', customer: 'cus_9', status: 'active', metadata: { scanners: 'token', tier: 'pro' } } },
+    });
+    expect((await handleWebhook(known, await signWebhook(known, secret))).status).toBe(200);
   });
 
   it('refuses unsigned webhooks', async () => {

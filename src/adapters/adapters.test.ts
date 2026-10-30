@@ -135,9 +135,27 @@ describe('signalsFromGoPlus', () => {
       canTakeTokens: false,
       metadataMutable: true,
       feesChangeable: false,
-      honeypotRisk: 0,
       transferFeePct: 0,
     });
+    // non_transferable is a token setting, not a sell test, so "0" proves nothing about selling.
+    expect(signals.honeypotRisk).toBeUndefined();
+  });
+
+  it('treats a non-transferable Solana token as unsellable', () => {
+    expect(signalsFromGoPlus('solana', { non_transferable: '1' }).honeypotRisk).toBe(100);
+  });
+
+  it('treats an empty owner as unknown and keeps the owner powers', () => {
+    const signals = signalsFromGoPlus('1', {
+      owner_address: '',
+      is_mintable: '1',
+      transfer_pausable: '1',
+      is_blacklisted: '1',
+      hidden_owner: '0',
+      can_take_back_ownership: '0',
+    });
+    expect(signals.ownershipRenounced).toBeUndefined();
+    expect(signals).toMatchObject({ mintable: true, canPause: true, hasBlacklist: true });
   });
 });
 

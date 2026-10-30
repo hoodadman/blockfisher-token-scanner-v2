@@ -1,7 +1,7 @@
 import { defineConfig, loadEnv, type ProxyOptions } from 'vite';
 import react from '@vitejs/plugin-react';
-import { scanPlugin } from './scanPlugin.ts';
-import { summarisePlugin } from './summarisePlugin.ts';
+import { scanPlugin } from './scanPlugin';
+import { summarisePlugin } from './summarisePlugin';
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, '.', '');
