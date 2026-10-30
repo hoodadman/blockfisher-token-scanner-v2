@@ -38,7 +38,7 @@ Send `"refresh": true` for a re-check: the scan skips every shared answer and fe
 
 ## Shared answers
 
-The paid answers are shared between everyone who scans the same token, website and extension alike. The server's `/api/twitter` and `/api/insightx` proxies keep each successful answer (X for 24 hours, InsightX for 1 hour). Each request sends `x-share-seconds`, how old an answer it accepts, and gets back `x-saved-at`, when the answer it got was fetched (`x-shared: 1` when it came from the store). `src/api/share.ts` decides the ages:
+The paid answers are shared between everyone who scans the same token, website and extension alike. The server's `/api/twitter` and `/api/insightx` proxies (which, like `/api/coingecko` and `/api/summarise`, only answer the server itself over 127.0.0.1; anyone else gets 404) keep each successful answer (X for 24 hours, InsightX for 1 hour). Each request sends `x-share-seconds`, how old an answer it accepts, and gets back `x-saved-at`, when the answer it got was fetched (`x-shared: 1` when it came from the store). `src/api/share.ts` decides the ages:
 
 | Part | Shared for | Token under a week old | Token under a day old |
 | --- | --- | --- | --- |
@@ -82,9 +82,9 @@ A Re-check skips the library. Every check that paid for X writes back at its dep
 
 Prices: Free £0, Pro £9.99 a month, Ultra £24.99 a month. `PAID_PLANS` decides how a scan's plan is chosen:
 
-- unset: the mock Scanner Pro. Each request says its own plan and gets it. Limits are per client IP.
-- `off`: every scan runs as Free.
-- `billing`: each scan runs on the plan its account pays for (see Billing). No key, or a plan that has ended: Free. A request may ask for a lower plan than it pays for, never a higher one. Paid limits count per account.
+- unset, `off` or anything else: every scan runs as Free.
+- `open`: the mock Scanner Pro, for local testing. Each request says its own plan and gets it. Limits are per client IP.
+- `billing`: each scan runs on the plan its account pays for (see Billing). No key, or a plan that has ended: Free. A request may ask for a lower plan than it pays for, never a higher one. Paid limits count per account. With neither `DATABASE_URL` nor `REDIS_URL`, accounts would only live in memory, so the server logs an error and runs as `off` instead.
 
 The website shows the three plans above the search box. With paid plans open (`billing` and a Stripe key), picking Pro or Ultra opens the checkout; otherwise the picker is the preview, saved in the browser. It scans through `/api/scan` like the extension: the browser finds the token on DexScreener and sends the pairs.
 
@@ -126,10 +126,11 @@ Not built yet: changing a package after buying (cancel and buy again for now), V
 | `INSIGHTX_API_KEY`, `TWITTER_BEARER_TOKEN`, `OPENAI_API_KEY` | Same keys the website already uses. The extension never sees them. |
 | `DATABASE_URL` | Postgres for the scan library and accounts (Render Postgres "Internal Database URL"; tables `scan_library` and `accounts_store`, created on start). Needed for billing; see Plans and Billing. Without it accounts fall back to `REDIS_URL`, which an `allkeys-lru` Key Value can evict, so use Postgres for real payments. |
 | `FREE_COMMUNITY_BUDGET` | Dollars a day, shared by all Free users, for basic community checks. Default 10. Security isn't capped. |
-| `PAID_PLANS` | `off` runs every scan as Free. `billing` runs each scan on the plan its account pays for. Unset: each request picks its plan (the mock Scanner Pro). |
+| `PAID_PLANS` | `billing` runs each scan on the plan its account pays for. `open`: each request picks its plan (the mock Scanner Pro, local testing only). Unset or anything else: every scan runs as Free. |
 | `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET` | Stripe's secret key and the webhook's signing secret. See Billing. |
 | `PUBLIC_URL` | This service's public address, for Stripe's return links and sign-in links. |
-| `RESEND_API_KEY`, `MAIL_FROM` | Send sign-in links by email through Resend. Optional. |
+| `RESEND_API_KEY`, `MAIL_FROM` | Send sign-in links by email through Resend. Without them the link is only written to the server log (`/api/health` shows `billing.mail`). |
+| `COINGECKO_API_KEY` | Optional CoinGecko Demo key, sent with the server's CoinGecko calls so Render's shared IP isn't turned away. |
 | `REDIS_URL` | Where shared answers are kept: the Internal URL of a Render Key Value instance (`redis://red-…:6379`). Unset or unreachable, the server keeps them in memory instead, which works the same but empties on every restart or deploy. `/api/health` shows which (`sharedStore`). |
 
 ## Hosting on Render

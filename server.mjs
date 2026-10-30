@@ -55,8 +55,10 @@ const PROXIES = [
   {
     prefix: "/api/coingecko",
     origin: "https://api.coingecko.com",
+    // Optional free Demo key; without one Render's shared IP is often turned away (429).
     headers() {
-      return {};
+      const key = process.env.COINGECKO_API_KEY?.trim();
+      return key ? { "x-cg-demo-api-key": key } : {};
     },
   },
 ];
@@ -114,10 +116,24 @@ function keyOf(req) {
   return match ? match[1] : undefined;
 }
 
-/** PAID_PLANS: "off" runs every scan as Free, "billing" uses paid accounts, anything else is the mock Scanner Pro. */
+/**
+ * PAID_PLANS: "billing" uses paid accounts, "open" is the mock Scanner Pro where the browser
+ * picks its own plan (local testing only), and anything else, including unset, is "off":
+ * every scan runs as Free. Billing also falls back to "off" when accounts would only live
+ * in memory (see the startup check at the bottom).
+ */
 function paidPlansMode() {
   const value = process.env.PAID_PLANS?.trim();
-  return value === "off" || value === "billing" ? value : "open";
+  if (value === "billing") return billingBlocked ? "off" : "billing";
+  return value === "open" ? "open" : "off";
+}
+
+/** Set at startup when PAID_PLANS=billing but there is no Postgres or Redis to keep accounts in. */
+let billingBlocked = false;
+
+/** Only this server may use the keyed relays below (it calls them over 127.0.0.1). */
+function fromThisServer(req) {
+  return ["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(req.socket.remoteAddress);
 }
 
 function clientOf(req) {
@@ -148,6 +164,7 @@ async function loadExtensionApi() {
     const stripeKey = process.env.STRIPE_SECRET_KEY?.trim();
     api.configureBilling({
       accounts: await accountsReady,
+      mailer: api.mailerFrom({ RESEND_API_KEY: process.env.RESEND_API_KEY, MAIL_FROM: process.env.MAIL_FROM }),
       stripe: stripeKey ? { secretKey: stripeKey, webhookSecret: process.env.STRIPE_WEBHOOK_SECRET?.trim() || undefined } : undefined,
       publicUrl: process.env.PUBLIC_URL?.trim() || undefined,
       enabled: paidPlansMode() === "billing",
@@ -184,12 +201,14 @@ async function health(res) {
   report.sharedStore = (await storeReady).kind;
   report.library = extensionApi ? extensionApi.libraryStoreKind() : "not loaded";
   report.paidPlans = { off: "off", billing: "billing", open: "open (mock)" }[paidPlansMode()];
+  if (billingBlocked) report.paidPlans = "off (PAID_PLANS=billing needs DATABASE_URL so accounts survive a restart)";
   if (extensionApi) report.billing = extensionApi.billingHealth();
   if (extensionApi) report.freeCommunityBudget = await extensionApi.freeBudgetToday();
   report.keys = {
     insightx: Boolean(process.env.INSIGHTX_API_KEY?.trim()),
     twitter: Boolean(process.env.TWITTER_BEARER_TOKEN?.trim()),
     openai: Boolean(process.env.OPENAI_API_KEY?.trim()),
+    coingecko: Boolean(process.env.COINGECKO_API_KEY?.trim()),
   };
   sendJson(res, 200, report);
 }
@@ -419,7 +438,8 @@ async function serveStatic(req, res) {
   let rel = decodeURIComponent(incoming.pathname);
   if (rel.endsWith("/")) rel += "index.html";
   const file = path.normalize(path.join(DIST, rel));
-  if (!file.startsWith(DIST)) {
+  // DIST + separator, so a sibling folder such as dist-server can't be reached with "..".
+  if (file !== DIST && !file.startsWith(DIST + path.sep)) {
     res.writeHead(403);
     res.end("forbidden");
     return;
@@ -458,6 +478,10 @@ const server = http.createServer(async (req, res) => {
     const pathname = new URL(req.url || "/", "http://localhost").pathname;
     const route = PROXIES.find((item) => pathname === item.prefix || pathname.startsWith(`${item.prefix}/`));
     if (route) {
+      if (!fromThisServer(req)) {
+        sendJson(res, 404, { error: "not found" });
+        return;
+      }
       await proxy(req, res, route);
       return;
     }
@@ -479,7 +503,8 @@ const server = http.createServer(async (req, res) => {
       await extensionRoute(req, res, pathname);
       return;
     }
-    if (pathname === "/api/summarise" && req.method === "POST") {
+    if (pathname === "/api/summarise" && req.method === "POST" && fromThisServer(req)) {
+      // Scans write the brief themselves (src/api/scan.ts); the page reads it from the scan.
       await summarise(req, res);
       return;
     }
@@ -495,11 +520,17 @@ const server = http.createServer(async (req, res) => {
     await serveStatic(req, res);
   } catch (error) {
     console.error("request failed", req.url, error);
-    sendJson(res, 502, { ok: false, text: "The scanner hit an error. Try again in a minute.", error: error instanceof Error ? error.message : "upstream failed" });
+    sendJson(res, 502, { ok: false, text: "The scanner hit an error. Try again in a minute.", error: "upstream failed" });
   }
 });
 
 await loadLocalEnv();
+
+// Accounts kept only in memory vanish on every deploy, while Stripe keeps charging. Refuse to sell.
+if (process.env.PAID_PLANS?.trim() === "billing" && !(await accountsReady)) {
+  billingBlocked = true;
+  console.error("PAID_PLANS=billing needs DATABASE_URL (or REDIS_URL) for accounts. Running with paid plans off.");
+}
 
 server.listen(PORT, HOST, () => {
   console.log(`Token scanner listening on ${HOST}:${PORT}`);

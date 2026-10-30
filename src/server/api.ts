@@ -28,6 +28,7 @@ export {
   handleSignOut,
   handleWebhook,
 } from './billing';
+export { mailerFrom } from '../billing/email';
 
 export interface ApiReply {
   status: number;
