@@ -3,7 +3,7 @@
  * here (from the build of api.ts, which re-exports these) and passes the access key from
  * the Authorization header. Like api.ts, this file never touches the socket.
  */
-import { Accounts, memoryAccounts, viewOf, type AccountStore } from '../billing/accounts';
+import { Accounts, memoryAccounts, viewOf, type Account, type AccountStore } from '../billing/accounts';
 import { SCANNERS, parseSelection, quote } from '../billing/catalog';
 import { mailerFrom, type Mailer } from '../billing/email';
 import { StripeError, createCheckout, createPortal, getCheckout, scannersFrom, verifyWebhook, type CheckoutSession, type StripeConfig } from '../billing/stripe';
@@ -79,7 +79,12 @@ export async function handleCheckout(body: unknown, key: string | undefined): Pr
   }
 }
 
-async function recordCheckout(session: CheckoutSession): Promise<void> {
+/** Card checkouts are paid at once. A bank debit can complete before the money arrives ("unpaid"). */
+function paidFor(session: CheckoutSession): boolean {
+  return session.payment_status === 'paid' || session.payment_status === 'no_payment_required';
+}
+
+async function recordCheckout(session: CheckoutSession): Promise<Account | undefined> {
   const account = await accounts.applyPackage({
     email: session.customer_details?.email ?? session.customer_email,
     customer: session.customer,
@@ -89,6 +94,7 @@ async function recordCheckout(session: CheckoutSession): Promise<void> {
     tier: session.metadata?.tier === 'ultra' ? 'ultra' : 'pro',
   });
   if (account) await accounts.linkCheckout(session.id, account);
+  return account;
 }
 
 /** POST /api/billing/webhook: Stripe's events, signed. The body must be the raw text. */
@@ -101,16 +107,23 @@ export async function handleWebhook(rawBody: string, signature: string | undefin
     return reply(400, { text: error instanceof StripeError ? error.message : 'Bad webhook' });
   }
   const object = event.data.object as Record<string, unknown> & { metadata?: { scanners?: string; tier?: string } };
+  // No account to apply it to: answer 500 so Stripe sends the event again, rather than lose a payer.
+  let applied: Account | undefined | 'ignored' = 'ignored';
   if (event.type === 'checkout.session.completed' && object.mode === 'subscription') {
-    await recordCheckout(object as unknown as CheckoutSession);
+    const session = object as unknown as CheckoutSession;
+    if (paidFor(session)) applied = await recordCheckout(session);
   } else if (event.type.startsWith('customer.subscription.')) {
-    await accounts.applyPackage({
+    applied = await accounts.applyPackage({
       customer: typeof object.customer === 'string' ? object.customer : undefined,
       subscription: typeof object.id === 'string' ? object.id : undefined,
       status: event.type === 'customer.subscription.deleted' ? 'canceled' : String(object.status ?? 'active'),
       scanners: scannersFrom(object.metadata),
       tier: object.metadata?.tier === 'ultra' ? 'ultra' : 'pro',
     });
+  }
+  if (applied === undefined) {
+    console.error('webhook: no account for', event.type, event.id);
+    return reply(500, { text: 'Account not found.' });
   }
   return reply(200, { received: true });
 }
@@ -126,7 +139,7 @@ export async function handleClaim(body: unknown): Promise<ApiReply> {
   if (claimed === undefined && stripe) {
     try {
       const session = await getCheckout(stripe, sessionId);
-      if (session.status === 'complete') {
+      if (session.status === 'complete' && paidFor(session)) {
         await recordCheckout(session);
         claimed = await accounts.claimKey(sessionId);
       }

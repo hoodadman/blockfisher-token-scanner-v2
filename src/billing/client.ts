@@ -65,11 +65,32 @@ export async function currentAccount(): Promise<AccountView | undefined> {
   return reply.account;
 }
 
+/**
+ * Stripe's checkout and portal refuse to load inside a frame, and the website shows this
+ * scanner in an iframe, so they open in the whole tab. If the browser won't let the frame
+ * move the tab, they open in a new one, and as a last resort in the frame itself.
+ */
+export function openStripe(url: string, win: Window = window): void {
+  if (win.top && win.top !== win) {
+    try {
+      win.top.location.href = url;
+      return;
+    } catch {
+      const tab = win.open(url, '_blank');
+      if (tab) {
+        tab.opener = null;
+        return;
+      }
+    }
+  }
+  win.location.assign(url);
+}
+
 /** Sends the browser to Stripe's checkout, or returns why it can't. */
 export async function startCheckout(scanners: ScannerId[], tier: TokenTier, email: string): Promise<string | undefined> {
   const reply = await call<Reply & { url?: string }>('/api/billing/checkout', { scanners, tier, email });
   if (reply.url) {
-    location.assign(reply.url);
+    openStripe(reply.url);
     return undefined;
   }
   return reply.text ?? 'Checkout is not answering. Try again in a minute.';
@@ -100,7 +121,7 @@ export async function askForSignIn(email: string): Promise<string> {
 export async function openPortal(): Promise<string | undefined> {
   const reply = await call<Reply & { url?: string }>('/api/account/portal', {});
   if (reply.url) {
-    location.assign(reply.url);
+    openStripe(reply.url);
     return undefined;
   }
   return reply.text;
