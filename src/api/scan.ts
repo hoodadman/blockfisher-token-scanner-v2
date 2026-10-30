@@ -1,7 +1,7 @@
 import type { InsightXNetwork } from '../adapters';
 import type { CommunityReport } from '../community';
 import type { FoundationReport } from '../foundation';
-import { averageScore, groupSecurity, scoreToken, type GroupedCheck, type TrustReport } from '../scoring';
+import { groupSecurity, overallScore, scoreToken, type GroupedCheck, type TrustReport } from '../scoring';
 import { localBrief } from '../summary/local';
 import { fetchBrief } from '../summary/fetch';
 import { summaryFacts } from '../summary/facts';
@@ -86,7 +86,7 @@ export async function scanReport(
   const security = scoreToken(lookup.signals);
   const community = lookup.community?.score ?? null;
   const foundation = lookup.foundation.score;
-  const overall = averageScore([security.score, community, foundation]);
+  const overall = overallScore(security.score, [community, foundation]);
   const facts = summaryFacts({
     name: lookup.name,
     overall,

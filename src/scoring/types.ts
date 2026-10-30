@@ -79,7 +79,7 @@ export interface CheckDefinition {
   evaluate: (signals: TokenSignals, now: number) => Tier | null | undefined;
   measure?: (signals: TokenSignals, now: number) => string;
   /** Counted as an issue when the data is missing, instead of being skipped. */
-  ifUnknown?: Tier;
+  ifUnknown?: Tier | ((signals: TokenSignals) => Tier);
 }
 
 export interface Issue {

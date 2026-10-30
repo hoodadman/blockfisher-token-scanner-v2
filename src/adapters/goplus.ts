@@ -73,10 +73,11 @@ function taxPct(value: string | number | undefined): number | undefined {
   return number <= 1 ? number * 100 : number;
 }
 
+/** An empty owner means GoPlus couldn't find one, not that it was burned, so it stays unknown. */
 function ownerGaveUp(address: string | undefined): boolean | undefined {
-  if (address === undefined) return undefined;
-  const normalised = address.toLowerCase();
-  return normalised === '' || normalised === ZERO || normalised === DEAD;
+  if (address === undefined || address.trim() === '') return undefined;
+  const normalised = address.trim().toLowerCase();
+  return normalised === ZERO || normalised === DEAD;
 }
 
 function lockedLiquidityPct(holders: GoPlusEvmToken['lp_holders']): number | undefined {
@@ -99,7 +100,9 @@ export function signalsFromGoPlus(chainId: GoPlusChainId, token: GoPlusToken): P
     const t = token as GoPlusSolanaToken;
     const fee = t.transfer_fee?.current_fee_rate;
     return compact({
-      honeypotRisk: flag(t.non_transferable) === undefined ? undefined : flag(t.non_transferable) ? 100 : 0,
+      // GoPlus has no sell test on Solana. A non-transferable token can't be sold at all,
+      // but a transferable one hasn't passed anything, so the sell test stays unknown.
+      honeypotRisk: flag(t.non_transferable) ? 100 : undefined,
       mintable: flag(t.mintable?.status),
       canFreeze: flag(t.freezable?.status),
       canTakeTokens: anyTrue(flag(t.closable?.status), flag(t.balance_mutable_authority?.status)),

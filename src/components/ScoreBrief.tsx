@@ -1,32 +1,22 @@
-import { useEffect, useId, useState, type ReactNode } from 'react';
+import { useId, useState, type ReactNode } from 'react';
 import type { CommunityReport } from '../community';
 import type { FoundationReport } from '../foundation';
-import { fetchBrief, localBrief, type PillarBrief, type SummaryFacts } from '../summary';
+import type { PillarBrief } from '../summary';
 import { formatCount, MetricList, MetricRow } from './Metrics';
 import './TrustScore.css';
 import './ScorePanel.css';
 import './ScoreBrief.css';
 
+/** The server writes the brief into the scan (scan.ts), so the page doesn't ask for it again. */
 export function ScoreBrief({
-  facts,
+  brief,
   community,
   foundation,
 }: {
-  facts: SummaryFacts;
+  brief: PillarBrief;
   community?: CommunityReport;
   foundation: FoundationReport;
 }) {
-  const [brief, setBrief] = useState<PillarBrief>(() => localBrief(facts));
-
-  useEffect(() => {
-    const controller = new AbortController();
-    setBrief(localBrief(facts));
-    void fetchBrief(facts, controller.signal).then((next) => {
-      if (!controller.signal.aborted) setBrief(next);
-    });
-    return () => controller.abort();
-  }, [facts]);
-
   return (
     <section className="brief" aria-label="Plain-English summary">
       <div className="brief__block">

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ScanRefused, scanOnServer } from './api/client';
 import { LookupError, isTokenAddress } from './api/lookup';
 import type { ScanReport } from './api/scan';
@@ -12,8 +12,6 @@ import { ScorePanel } from './components/ScorePanel';
 import { ScoreTriangle } from './components/ScoreTriangle';
 import { TokenSearch } from './components/TokenSearch';
 import { PLANS, PLAN_IDS, type PlanId } from './plans/plans';
-import { averageScore } from './scoring';
-import { summaryFacts } from './summary/facts';
 
 const PLAN_KEY = 'blockfisher-plan';
 
@@ -163,11 +161,7 @@ function Result({ report: scan, onRecheck }: { report: ScanReport; onRecheck: ()
   const holdersNeedKey = failures.some(({ source, status }) => source === 'holders' && (status === 401 || status === 403));
   const twitterNeedKey = failures.some(({ source, status }) => source === 'community' && (status === 401 || status === 403));
   const showSymbol = symbol && symbol !== name;
-  const overall = averageScore([report.score, community?.score, foundation.score]);
-  const facts = useMemo(
-    () => summaryFacts({ name, overall, security: report, community, foundation }),
-    [name, overall, report, community, foundation],
-  );
+  const { overall, brief } = scan;
 
   return (
     <div className="result">
@@ -206,7 +200,7 @@ function Result({ report: scan, onRecheck }: { report: ScanReport; onRecheck: ()
               { id: 'foundation', label: 'Foundation', score: foundation.score },
             ]}
           />
-          <ScoreBrief facts={facts} community={community} foundation={foundation} />
+          <ScoreBrief brief={brief} community={community} foundation={foundation} />
         </div>
         <ScorePanel security={report} />
       </div>

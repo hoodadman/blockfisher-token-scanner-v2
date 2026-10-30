@@ -173,12 +173,32 @@ describe('scoreToken', () => {
     expect(report.band).toBe('medium');
   });
 
-  it('flags an unknown pool size on a new token, but not on an old one', () => {
+  it('flags an unknown pool size at any age', () => {
     const fresh = score({ ...cleanSolana, liquidityUsd: undefined, launchedAt: NOW - 3 * 3_600_000 });
     expect(issueIds(fresh)).toEqual(['liquidity', 'tokenAge']);
     // 20 + 20 × 0.6
     expect(fresh.score).toBe(68);
-    expect(issueIds(score({ ...cleanSolana, liquidityUsd: undefined }))).toEqual([]);
+    // A launchpad token 10 days old with no pool size used to score 100.
+    const older = score({ ...cleanSolana, liquidityUsd: undefined, launchedAt: NOW - 10 * DAY });
+    expect(issueIds(older)).toEqual(['liquidity']);
+    expect(older.issues[0].title).toBe('Trading pool size unknown');
+    expect(older.score).toBe(79);
+  });
+
+  it('flags an unknown start date as a minor issue', () => {
+    const report = score({ ...cleanSolana, launchedAt: undefined });
+    expect(report.issues.map((issue) => [issue.id, issue.severity])).toEqual([['tokenAge', 'minor']]);
+    expect(report.score).toBe(95);
+    // With neither the pool size nor the age known, it can't score 100 either.
+    expect(score({ ...cleanSolana, liquidityUsd: undefined, launchedAt: undefined }).score).toBe(77);
+  });
+
+  it('says plainly when a Solana sell test can’t run', () => {
+    const report = score({ ...cleanSolana, honeypotRisk: undefined });
+    expect(report.issues[0]).toMatchObject({ id: 'honeypot', severity: 'warning', title: 'We can’t test selling on Solana yet' });
+    expect(report.passed.map((item) => item.id)).not.toContain('honeypot');
+    expect(report.score).toBe(70);
+    expect(score({ ...cleanEvm, honeypotRisk: undefined }).issues[0].title).toBe('Sell test couldn’t run');
   });
 
   it('lists issues from most to least severe', () => {

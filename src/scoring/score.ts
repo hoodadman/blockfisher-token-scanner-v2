@@ -58,7 +58,7 @@ export function scoreToken(signals: TokenSignals, options: ScoreOptions = {}): T
     } else if (tier) {
       issues.push(toIssue(check, tier, check.measure?.(signals, now)));
     } else if (check.ifUnknown) {
-      issues.push(toIssue(check, check.ifUnknown));
+      issues.push(toIssue(check, typeof check.ifUnknown === 'function' ? check.ifUnknown(signals) : check.ifUnknown));
     } else {
       notChecked.push({ id: check.id, label: check.name, experimental, about });
     }

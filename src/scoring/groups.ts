@@ -133,6 +133,20 @@ export function groupSecurity(report: TrustReport): GroupedCheck[] {
       });
       continue;
     }
+    // A group only passes when every check in it ran. A half-checked group must not read as safe.
+    if (foundPassed.length && foundUnknown.length) {
+      rows.push({
+        id: group.id,
+        label: group.label,
+        status: 'unknown',
+        summary: `We checked ${foundPassed.length} of ${foundPassed.length + foundUnknown.length} things here; ${foundUnknown
+          .map((item) => item.label.toLowerCase())
+          .join(', ')} couldn’t be checked.`,
+        details: group.about,
+        experimental: foundUnknown.every((item) => item.experimental),
+      });
+      continue;
+    }
     if (foundPassed.length) {
       rows.push({
         id: group.id,
