@@ -152,7 +152,11 @@ describe('scoreToken', () => {
 
   it('describes a fatal exit tax plainly', () => {
     expect(score({ ...cleanEvm, sellFeePct: 99 }).issues[0].summary).toBe(
-      'The token takes 99% when you sell, so you get little or nothing back.',
+      'You will lose 99% of your money to tax when you sell.',
+    );
+    expect(score({ ...cleanEvm, sellFeePct: 99 }).fatal?.title).toBe('You’d lose 99% of your money');
+    expect(score({ ...cleanEvm, transferFeePct: 90 }).issues[0].summary).toBe(
+      'You will lose 90% of your money to tax when you send or sell.',
     );
   });
 
@@ -187,7 +191,9 @@ describe('scoreToken', () => {
   });
 
   it('fills the measured value into the wording', () => {
-    expect(score({ ...cleanEvm, sellFeePct: 12 }).issues[0].summary).toBe('The token charges 12% when you sell.');
+    expect(score({ ...cleanEvm, sellFeePct: 12 }).issues[0].summary).toBe('You will lose 12% when you sell.');
+    expect(score({ ...cleanEvm, buyFeePct: 40, sellFeePct: 40 }).issues[0].summary).toBe('You will lose 40% when you buy or sell.');
+    expect(score({ ...cleanEvm, transferFeePct: 20 }).issues[0].summary).toBe('You will lose 20% on every transfer.');
     expect(score({ ...cleanSolana, launchedAt: NOW - 3 * 3_600_000 }).issues[0].summary).toBe('It started trading 3 hours ago.');
   });
 

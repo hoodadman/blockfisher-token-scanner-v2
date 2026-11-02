@@ -170,8 +170,8 @@ export const CHECKS: readonly CheckDefinition[] = [
           severity: 'critical',
           points: 100,
           fatal: true,
-          title: 'Selling takes almost everything',
-          summary: `The token takes ${percent(exitFee)} when you ${(s.sellFeePct ?? 0) >= exitFee ? 'sell' : 'send or sell'}, so you get little or nothing back.`,
+          title: `You’d lose ${percent(exitFee)} of your money`,
+          summary: `You will lose ${percent(exitFee)} of your money to tax when you ${(s.sellFeePct ?? 0) >= exitFee ? 'sell' : 'send or sell'}.`,
           details: tooltipFor('fees'),
         };
       }
@@ -180,21 +180,21 @@ export const CHECKS: readonly CheckDefinition[] = [
           severity: 'critical',
           points: 60,
           title: 'Very high fees',
-          summary: 'The token charges {value}.',
+          summary: 'You will lose {value}.',
           details: tooltipFor('fees'),
         }],
         [10, {
           severity: 'warning',
           points: 20,
           title: 'High fees',
-          summary: 'The token charges {value}.',
+          summary: 'You will lose {value}.',
           details: tooltipFor('fees'),
         }],
         [5, {
           severity: 'minor',
           points: 5,
           title: 'Trading fees',
-          summary: 'The token charges {value}.',
+          summary: 'You will lose {value}.',
           details: tooltipFor('fees'),
         }],
       ]);
