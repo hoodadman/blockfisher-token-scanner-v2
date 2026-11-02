@@ -86,7 +86,7 @@ export async function scanReport(
   const security = scoreToken(lookup.signals);
   const community = lookup.community?.score ?? null;
   const foundation = lookup.foundation.score;
-  const overall = overallScore(security.score, [community, foundation]);
+  const overall = overallScore(security.score, [community, foundation], security.fatal !== null);
   const facts = summaryFacts({
     name: lookup.name,
     overall,

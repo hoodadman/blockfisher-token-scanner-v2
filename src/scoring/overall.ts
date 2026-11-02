@@ -7,13 +7,16 @@ export function averageScore(scores: readonly (number | null | undefined)[]): nu
 }
 
 /**
- * The overall mark. Security leads: with no Security score there is no overall, and the
- * overall never sits in a safer band than Security (a honeypot can't average up to "medium").
+ * The overall mark. Security leads: a confirmed fatal issue (such as a honeypot) makes the
+ * overall 0, with no Security score there is no overall, and otherwise the overall never sits
+ * in a safer band than Security.
  */
 export function overallScore(
   security: number | null | undefined,
   others: readonly (number | null | undefined)[],
+  fatal = false,
 ): number | null {
+  if (fatal) return 0;
   if (security === null || security === undefined) return null;
   const average = averageScore([security, ...others]) as number;
   const ceiling = security < 40 ? 39 : security < 80 ? 79 : 100;

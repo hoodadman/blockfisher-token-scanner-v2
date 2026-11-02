@@ -1,6 +1,6 @@
 import { ABOUT } from './about';
 import { CHECKS } from './checks';
-import type { CheckDefinition, CheckSummary, Issue, RiskBand, Severity, Tier, TokenSignals, TrustReport } from './types';
+import type { CheckDefinition, CheckSummary, FatalReason, Issue, RiskBand, Severity, Tier, TokenSignals, TrustReport } from './types';
 
 /** Lowest score in each band, highest band first. */
 export const BANDS: ReadonlyArray<{ band: RiskBand; min: number }> = [
@@ -66,8 +66,15 @@ export function scoreToken(signals: TokenSignals, options: ScoreOptions = {}): T
 
   issues.sort((a, b) => SEVERITY_ORDER[a.severity] - SEVERITY_ORDER[b.severity] || b.points - a.points);
 
+  // A confirmed fatal issue settles it: 0, however little else we could check.
+  const fatalIssue = issues.find((issue) => issue.fatal);
+  if (fatalIssue) {
+    const fatal: FatalReason = { id: fatalIssue.id, title: fatalIssue.title, summary: fatalIssue.summary };
+    return { score: 0, band: 'high', issues, passed, notChecked, coverage, fatal };
+  }
+
   if (coverage.total === 0 || coverage.checked / coverage.total < MIN_COVERAGE) {
-    return { score: null, band: null, issues, passed, notChecked, coverage };
+    return { score: null, band: null, issues, passed, notChecked, coverage, fatal: null };
   }
 
   const deducted = totalDeduction(issues);
@@ -75,7 +82,7 @@ export function scoreToken(signals: TokenSignals, options: ScoreOptions = {}): T
   const score = Math.max(0, Math.min(cap, Math.round(100 - deducted)));
   const band = BANDS.find(({ min }) => score >= min)?.band ?? 'high';
 
-  return { score, band, issues, passed, notChecked, coverage };
+  return { score, band, issues, passed, notChecked, coverage, fatal: null };
 }
 
 /** Expects issues sorted most severe first, then by points. */
@@ -100,5 +107,6 @@ function toIssue(check: CheckDefinition, tier: Tier, measured = ''): Issue {
     title: fill(tier.title),
     summary: fill(tier.summary),
     details: fill(tier.details),
+    ...(tier.fatal ? { fatal: true } : {}),
   };
 }

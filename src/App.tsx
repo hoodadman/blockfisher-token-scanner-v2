@@ -188,6 +188,13 @@ function Result({ report: scan, onRecheck }: { report: ScanReport; onRecheck: ()
         </p>
       )}
 
+      {report.fatal && (
+        <p className="notice notice--fatal" role="alert">
+          <strong>Scored 0: {report.fatal.title.toLowerCase()}.</strong> {report.fatal.summary} You would have no way to
+          get your money back, so nothing else about this token can raise the score.
+        </p>
+      )}
+
       <PlanNotes report={scan} onRecheck={onRecheck} />
 
       <div className="result__split">
