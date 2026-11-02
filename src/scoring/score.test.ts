@@ -97,8 +97,63 @@ describe('scoreToken', () => {
     expect(report.band).toBe('high');
   });
 
-  it('scores a confirmed honeypot as 0', () => {
-    expect(score({ ...cleanEvm, honeypotRisk: 100 }).score).toBe(0);
+  it('scores a confirmed honeypot as 0 and says why', () => {
+    const report = score({ ...cleanEvm, honeypotRisk: 100 });
+    expect(report.score).toBe(0);
+    expect(report.band).toBe('high');
+    expect(report.fatal).toEqual({
+      id: 'honeypot',
+      title: 'Can’t be sold',
+      summary: 'Our sell test found you can buy this token but not sell it.',
+    });
+  });
+
+  it('scores 0 for every confirmed flag that stops you selling', () => {
+    const cases: Array<[Partial<TokenSignals>, string]> = [
+      [{ honeypotRisk: 90 }, 'honeypot'],
+      [{ sellFeePct: 90 }, 'fees'],
+      [{ transferFeePct: 100 }, 'fees'],
+      [{ tradingPaused: true }, 'pause'],
+    ];
+    for (const [flags, id] of cases) {
+      const report = score({ ...cleanEvm, ...flags });
+      expect([report.score, report.fatal?.id]).toEqual([0, id]);
+    }
+    const solana = score({ ...cleanSolana, honeypotRisk: 100 });
+    expect([solana.score, solana.fatal?.id]).toEqual([0, 'honeypot']);
+  });
+
+  it('scores 0 for a confirmed honeypot even when most other checks had no data', () => {
+    const report = score({ chain: 'evm', honeypotRisk: 100 });
+    expect(report.score).toBe(0);
+    expect(report.fatal?.id).toBe('honeypot');
+  });
+
+  it('does not score 0 for a sell test that couldn’t run or only shows signs', () => {
+    expect(score({ ...cleanEvm, honeypotRisk: undefined }).fatal).toBeNull();
+    expect(score({ ...cleanEvm, honeypotRisk: 60 }).score).toBe(70);
+    expect(score({ ...cleanEvm, honeypotRisk: 60 }).fatal).toBeNull();
+  });
+
+  it('does not score 0 for powers that could block selling but aren’t confirmed in use', () => {
+    const cases: Array<Partial<TokenSignals>> = [
+      { canPause: true },
+      { hasBlacklist: true },
+      { cannotSellAll: true },
+      { sellFeePct: 89 },
+      { buyFeePct: 99 },
+    ];
+    for (const flags of cases) {
+      const report = score({ ...cleanEvm, ...flags });
+      expect(report.fatal).toBeNull();
+      expect(report.score).toBeGreaterThan(0);
+    }
+  });
+
+  it('describes a fatal exit tax plainly', () => {
+    expect(score({ ...cleanEvm, sellFeePct: 99 }).issues[0].summary).toBe(
+      'The token takes 99% when you sell, so you get little or nothing back.',
+    );
   });
 
   it('counts a missing sell test as a warning rather than a pass', () => {

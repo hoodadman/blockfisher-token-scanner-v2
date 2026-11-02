@@ -63,6 +63,18 @@ export interface Tier {
   title: string;
   summary: string;
   details: string;
+  /**
+   * A confirmed problem so serious that nothing else matters: Security and the overall score
+   * are set to 0. Only for confirmed results, never for a check that couldn't run.
+   */
+  fatal?: boolean;
+}
+
+/** Why a score was set to 0. */
+export interface FatalReason {
+  id: string;
+  title: string;
+  summary: string;
 }
 
 export interface CheckDefinition {
@@ -91,6 +103,8 @@ export interface Issue {
   title: string;
   summary: string;
   details: string;
+  /** Set when this issue forces the score to 0. */
+  fatal?: boolean;
 }
 
 export interface CheckSummary {
@@ -110,4 +124,6 @@ export interface TrustReport {
   notChecked: CheckSummary[];
   /** Core (non-experimental) checks that had data, out of those that apply to the chain. */
   coverage: { checked: number; total: number };
+  /** Set when a confirmed fatal issue (such as a honeypot) forced Security and the overall to 0. */
+  fatal: FatalReason | null;
 }

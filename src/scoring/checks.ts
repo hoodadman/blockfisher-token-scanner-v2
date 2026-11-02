@@ -7,6 +7,9 @@ type Rule = readonly [threshold: number, tier: Tier];
 
 const HOUR = 3_600_000;
 
+/** A sell or transfer tax at or above this stops you getting your money back, so the score is 0. */
+export const EXIT_FEE_FATAL_PCT = 90;
+
 function atLeast(value: number | undefined, rules: readonly Rule[]) {
   if (value === undefined) return undefined;
   return rules.find(([min]) => value >= min)?.[1] ?? null;
@@ -74,8 +77,9 @@ export const CHECKS: readonly CheckDefinition[] = [
         [90, {
           severity: 'critical',
           points: 100,
-          title: 'Likely can’t be sold',
-          summary: 'Tests suggest you could buy this token but not sell it.',
+          fatal: true,
+          title: 'Can’t be sold',
+          summary: 'Our sell test found you can buy this token but not sell it.',
           details: tooltipFor('honeypot'),
         }],
         [50, {
@@ -133,6 +137,7 @@ export const CHECKS: readonly CheckDefinition[] = [
         return {
           severity: 'critical',
           points: 60,
+          fatal: true,
           title: 'Trading is switched off',
           summary: 'Nobody can buy, sell or send this token right now.',
           details: tooltipFor('pause'),
@@ -153,8 +158,20 @@ export const CHECKS: readonly CheckDefinition[] = [
     passLabel: 'Low or no trading fees',
     category: 'security',
     measure: describeFee,
-    evaluate: (s) =>
-      atLeast(highestFee(s), [
+    evaluate: (s) => {
+      // A sell or transfer tax this high takes (nearly) everything you'd get back.
+      const exitFee = Math.max(s.sellFeePct ?? 0, s.transferFeePct ?? 0);
+      if (exitFee >= EXIT_FEE_FATAL_PCT) {
+        return {
+          severity: 'critical',
+          points: 100,
+          fatal: true,
+          title: 'Selling takes almost everything',
+          summary: `The token takes ${percent(exitFee)} when you ${(s.sellFeePct ?? 0) >= exitFee ? 'sell' : 'send or sell'}, so you get little or nothing back.`,
+          details: tooltipFor('fees'),
+        };
+      }
+      return atLeast(highestFee(s), [
         [30, {
           severity: 'critical',
           points: 60,
@@ -176,7 +193,8 @@ export const CHECKS: readonly CheckDefinition[] = [
           summary: 'The token charges {value}.',
           details: tooltipFor('fees'),
         }],
-      ]),
+      ]);
+    },
   },
   {
     id: 'mintable',

@@ -15,8 +15,13 @@ describe('overallScore', () => {
     expect(overallScore(undefined, [80, 75])).toBeNull();
   });
 
+  it('is 0 when Security found a confirmed fatal issue, whatever the other pillars say', () => {
+    expect(overallScore(0, [100, 100], true)).toBe(0);
+    expect(overallScore(null, [100, 100], true)).toBe(0);
+  });
+
   it('never puts the overall in a safer band than Security', () => {
-    // A honeypot (Security 0) used to average to 55, "medium risk".
+    // Security 0 without a fatal issue used to average to 55, "medium risk".
     expect(overallScore(0, [85, 80])).toBe(39);
     expect(overallScore(70, [100, 100])).toBe(79);
     expect(overallScore(95, [100, 90])).toBe(95);

@@ -218,6 +218,15 @@ body {
   font-size: 0.95rem;
 }
 
+.notice--fatal {
+  border-color: var(--danger);
+  color: var(--text, inherit);
+}
+
+.notice--fatal strong {
+  color: var(--danger);
+}
+
 html[data-theme="light"] {
   color-scheme: light;
   --bg: #f4f1ea;
