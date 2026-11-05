@@ -9,9 +9,10 @@ import { identify, parseCandidates, type IdentifiedToken } from '../api/identify
 import { LookupError, isTokenAddress, type LookupOptions, type Prefetched } from '../api/lookup';
 import { scanErrorText, scanReport, scanText, type ScanReport } from '../api/scan';
 import { parsePrefetched } from './prefetched';
+import { MonthlyAllowance, type AllowanceStatus } from '../plans/allowance';
 import { DailyBudget } from '../plans/budget';
 import { libraryKind, libraryStore, setLibraryStore, type LibraryStore } from '../plans/library';
-import { PLANS, PLAN_IDS, atProDepth, planFrom, type Plan, type PlanId } from '../plans/plans';
+import { PLANS, PLAN_IDS, SCANS_PER_HOUR, planFrom, xCostOf, type Plan, type PlanId } from '../plans/plans';
 import { planOf } from '../billing/accounts';
 import { accountsFor } from './billing';
 
@@ -102,13 +103,12 @@ export class RateLimiter {
 const scans = new TtlCache<ScanReport>(SCAN_CACHE_MS);
 const running = new Map<string, Promise<ApiReply>>();
 const identities = new TtlCache<IdentifiedToken[]>(IDENTIFY_CACHE_MS);
-// Cached answers don't count: the limit protects the paid APIs behind a fresh scan.
-const scanLimit = new RateLimiter(30, 10 * 60_000);
+// Every scan counts, cached or not, on every plan: per account, or per client without one.
+let scanLimit = new RateLimiter(SCANS_PER_HOUR, 60 * 60_000);
 // A re-check skips every shared answer, so it costs the most; each plan allows a few.
 const refreshLimits = new Map<PlanId, RateLimiter>();
-const DAY_MS = 24 * 60 * 60_000;
-// Free: basic checks a day. Ultra: deep scans a day. Per client, until accounts exist.
-const dailyLimits = new Map<PlanId, RateLimiter>();
+// Fresh Community + Foundation checks a month (plans.ts `freshPerMonth`), kept in the library's store.
+let allowance = new MonthlyAllowance(libraryStore);
 const identifyLimit = new RateLimiter(120, 10 * 60_000);
 
 function limiter(limits: Map<PlanId, RateLimiter>, plan: Plan, max: number, windowMs: number): RateLimiter {
@@ -120,7 +120,11 @@ function limiter(limits: Map<PlanId, RateLimiter>, plan: Plan, max: number, wind
   return found;
 }
 
-/** Default shared daily cap, in dollars, on Free's basic community checks (FREE_COMMUNITY_BUDGET). */
+/**
+ * Default shared daily cap, in dollars, on what all Free users together spend on fresh
+ * community checks (FREE_COMMUNITY_BUDGET). A backstop on top of each user's 4 a month,
+ * since Free users without an account are told apart only by their address.
+ */
 export const FREE_COMMUNITY_BUDGET = 10;
 let freeBudget = new DailyBudget(FREE_COMMUNITY_BUDGET, libraryStore);
 
@@ -145,7 +149,7 @@ export function configure(
   }
 }
 
-/** Dollars spent today on Free's basic community checks, and the cap; for /api/health. */
+/** Dollars spent today on Free's fresh community checks, and the cap; for /api/health. */
 export async function freeBudgetToday(): Promise<{ spent: number; cap: number }> {
   return { spent: Math.round((await freeBudget.spentToday()) * 1000) / 1000, cap: freeBudget.dollars };
 }
@@ -154,10 +158,11 @@ export function libraryStoreKind(): string {
   return libraryKind();
 }
 
-/** Resets the limits and today's budget; for tests. */
+/** Resets the limits, the month's counts and today's budget; for tests. */
 export function resetLimits(budget = FREE_COMMUNITY_BUDGET): void {
   refreshLimits.clear();
-  dailyLimits.clear();
+  scanLimit = new RateLimiter(SCANS_PER_HOUR, 60 * 60_000);
+  allowance = new MonthlyAllowance(libraryStore);
   freeBudget = new DailyBudget(budget, libraryStore);
 }
 
@@ -174,8 +179,9 @@ async function planForRequest(asked: unknown, client: string, accessKey: string 
   const paid = planOf(account);
   const wanted = typeof asked === 'string' && (PLAN_IDS as readonly string[]).includes(asked) ? (asked as PlanId) : paid;
   const plan = PLAN_IDS.indexOf(wanted) < PLAN_IDS.indexOf(paid) ? wanted : paid;
-  // Paid limits follow the account, not the address, so they can't be dodged or shared out.
-  return { plan: PLANS[plan], client: account && plan !== 'free' ? `account:${account.id}` : client };
+  // Limits follow the account, not the address, so they can't be dodged or shared out.
+  // Free without an account has only its address to go on (see docs: Free has no sign-up yet).
+  return { plan: PLANS[plan], client: account ? `account:${account.id}` : client };
 }
 
 export async function handleScan(body: unknown, requestClient: string, accessKey?: string): Promise<ApiReply> {
@@ -185,53 +191,56 @@ export async function handleScan(body: unknown, requestClient: string, accessKey
   const network = typeof raw.network === 'string' && (NETWORKS as readonly string[]).includes(raw.network) ? (raw.network as InsightXNetwork) : undefined;
   if (!address) return { status: 400, body: { ok: false, text: 'Send a contract address to scan.' } };
   if (!isTokenAddress(address)) return { status: 422, body: { ok: false, text: scanErrorText(new LookupError('invalid')) } };
-  const chosen = await planForRequest(raw.plan, requestClient, accessKey);
-  let plan = chosen.plan;
-  const client = chosen.client;
+  const { plan, client } = await planForRequest(raw.plan, requestClient, accessKey);
   if (refresh && plan.rechecks === 0) {
     return { status: 403, body: { ok: false, text: 'Re-check is part of Scanner Pro. Free scans use the latest saved community check.' } };
   }
+  if (refresh && (await allowance.status(client, plan.freshPerMonth)).left === 0) {
+    return { status: 429, body: { ok: false, text: `Re-check needs a fresh community check, and this month’s ${plan.freshPerMonth} are used up. They reset on the 1st.` } };
+  }
+
+  // Every scan counts towards the hourly limit, whether or not it is answered from the cache.
+  const wait = Math.max(scanLimit.take(client), refresh ? limiter(refreshLimits, plan, plan.rechecks, 10 * 60_000).take(client) : 0);
+  if (wait > 0) return tooMany(wait);
 
   const prefetched = parsePrefetched(body);
   // Results built from data the client sent are only reused for that client.
   const key = `${prefetched.pairs ? `${client}|` : ''}${plan.id}:${network ?? 'any'}:${address.toLowerCase()}`;
   const cached = refresh ? undefined : scans.get(key);
-  if (cached) return { status: 200, body: { ok: true, text: scanText(cached), report: cached } };
+  if (cached) return withAllowance({ status: 200, body: { ok: true, text: scanText(cached), report: cached } }, client, plan);
 
   // The extension asks again if its first request was dropped; share the scan in progress.
-  const pending = running.get(key);
+  // Per client, since one member's month may be used up and another's not.
+  const runningKey = `${client}|${key}`;
+  const pending = running.get(runningKey);
   if (pending) return pending;
 
-  const wait = Math.max(scanLimit.take(client), refresh ? limiter(refreshLimits, plan, plan.rechecks, 10 * 60_000).take(client) : 0);
-  if (wait > 0) return tooMany(wait);
-
-  const notes: string[] = [];
-  let runKey = key;
-  const daily = plan.paidScansPerDay === undefined ? undefined : limiter(dailyLimits, plan, plan.paidScansPerDay, DAY_MS);
-  if (plan.id === 'ultra' && daily && daily.take(client) > 0) {
-    plan = atProDepth(plan);
-    // Kept apart, so other Ultra users never get this shallower result from the cache.
-    runKey = `${key}|pro-depth`;
-    notes.push(`Today’s ${PLANS.ultra.paidScansPerDay} deep scans are used up, so this one ran at Pro depth.`);
-  }
   const options: LookupOptions = { plan, library: true };
-  if (plan.whenUnscanned === 'basic' && daily) {
-    // Free's basic checks: within the shared daily budget, then the client's own allowance.
-    let reserved = 0;
-    options.mayCheckBasic = async (maxCost) => {
-      if (!(await freeBudget.reserve(maxCost))) return false;
-      if (daily.take(client) > 0) {
-        freeBudget.settle(maxCost, 0);
-        return false;
-      }
-      reserved = maxCost;
-      return true;
-    };
-    options.spent = (cost) => freeBudget.settle(reserved, cost);
-  }
-  const work = runScan(runKey, address, network, prefetched, refresh, options, notes).finally(() => running.delete(key));
-  running.set(key, work);
+  // Free users together also stay within a shared daily budget, held at the worst case.
+  const cost = plan.id === 'free' ? xCostOf(plan.x) : 0;
+  options.mayFetch = async () => {
+    if (cost > 0 && !(await freeBudget.reserve(cost))) return false;
+    if (await allowance.take(client, plan.freshPerMonth)) return true;
+    if (cost > 0) freeBudget.settle(cost, 0);
+    return false;
+  };
+  options.fetchDone = (read) => {
+    if (read) return;
+    allowance.giveBack(client);
+    if (cost > 0) freeBudget.settle(cost, 0);
+  };
+  const work = runScan(key, address, network, prefetched, refresh, options)
+    .then((reply) => withAllowance(reply, client, plan))
+    .finally(() => running.delete(runningKey));
+  running.set(runningKey, work);
   return work;
+}
+
+/** Adds what's left of the month's fresh community checks to a scan reply. */
+async function withAllowance(reply: ApiReply, client: string, plan: Plan): Promise<ApiReply> {
+  if (reply.status !== 200) return reply;
+  const status: AllowanceStatus = await allowance.status(client, plan.freshPerMonth);
+  return { ...reply, body: { ...(reply.body as object), freshChecks: status } };
 }
 
 async function runScan(
@@ -241,15 +250,15 @@ async function runScan(
   prefetched: Prefetched,
   refresh: boolean,
   options: LookupOptions,
-  notes: string[],
 ): Promise<ApiReply> {
   const started = Date.now();
   try {
-    const scanned = await scanReport(address, network, undefined, prefetched, refresh, options);
-    const report = notes.length > 0 ? { ...scanned, notes: [...scanned.notes, ...notes] } : scanned;
-    scans.set(key, report);
+    const report = await scanReport(address, network, undefined, prefetched, refresh, options);
+    // A capped result (a saved one shown because the month's checks are used up) is this
+    // member's alone; others on the plan still get a fresh one.
+    if (!report.capped) scans.set(key, report);
     const failed = report.failures.map((failure) => `${failure.source}${failure.status ? `:${failure.status}` : ''}`).join(',');
-    console.log(`scan ${report.plan} ${network ?? 'any'}:${address} ${Date.now() - started}ms community=${report.communitySource}${failed ? ` failed=${failed}` : ''}`);
+    console.log(`scan ${report.plan} ${network ?? 'any'}:${address} ${Date.now() - started}ms community=${report.communitySource}${report.capped ? ' capped' : ''}${failed ? ` failed=${failed}` : ''}`);
     return { status: 200, body: { ok: true, text: scanText(report), report } };
   } catch (error) {
     if (!(error instanceof LookupError) || error.reason === 'unavailable') console.error('scan failed', address, `${Date.now() - started}ms`, error);

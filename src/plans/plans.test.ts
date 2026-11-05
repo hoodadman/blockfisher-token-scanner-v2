@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { PLANS, atProDepth, planFrom, xCostOf } from './plans';
+import { PLANS, SCANS_PER_HOUR, planFrom, xCostOf } from './plans';
 
 describe('planFrom', () => {
   it('reads a plan id and treats anything else as Pro, so older callers keep working', () => {
@@ -11,22 +11,17 @@ describe('planFrom', () => {
 });
 
 describe('the three plans', () => {
-  it('only Free reads Community from the library, runs basic checks on unscanned tokens and has no Re-check', () => {
-    expect(PLANS.free).toMatchObject({ community: 'library', rechecks: 0, whenUnscanned: 'basic', paidScansPerDay: 5 });
-    expect(PLANS.pro.whenUnscanned).toBe('full');
-    expect(PLANS.pro).toMatchObject({ community: 'shared' });
-    expect(PLANS.ultra).toMatchObject({ community: 'shared', extraSecurity: true });
+  it('caps fresh Community + Foundation checks a month: Free 4 and Pro 30 at Pro depth, Ultra 30 at Ultra depth', () => {
+    expect(PLANS.free).toMatchObject({ freshPerMonth: 4, depth: 'pro', rechecks: 0, extraSecurity: false });
+    expect(PLANS.free.x).toEqual(PLANS.pro.x);
+    expect(PLANS.pro).toMatchObject({ freshPerMonth: 30, depth: 'pro' });
+    expect(PLANS.ultra).toMatchObject({ freshPerMonth: 30, depth: 'ultra', extraSecurity: true });
+    expect(SCANS_PER_HOUR).toBe(60);
   });
 
   it('Ultra reads more of X, at a higher worst-case cost', () => {
     expect(PLANS.ultra.x.mentions).toBeGreaterThan(PLANS.pro.x.mentions);
     expect(xCostOf(PLANS.pro.x)).toBeCloseTo(0.29, 2);
     expect(xCostOf(PLANS.ultra.x)).toBeCloseTo(0.715, 3);
-  });
-
-  it('Ultra past its deep scans keeps its name but runs at Pro depth without extras', () => {
-    const fallback = atProDepth(PLANS.ultra);
-    expect(fallback).toMatchObject({ id: 'ultra', x: PLANS.pro.x, extraSecurity: false });
-    expect(fallback.communityMaxAge).toBeUndefined();
   });
 });

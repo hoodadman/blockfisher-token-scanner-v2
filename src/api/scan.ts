@@ -46,25 +46,36 @@ export interface ScanReport {
   communityFrom?: Source;
   /** Ultra's second-opinion security checks. */
   secondOpinion?: SecondOpinion;
+  /** True when this month's fresh community checks were used up, so a saved result (or none) was shown. */
+  capped?: boolean;
   /** Plain-language notes about this result, for the card. */
   notes: string[];
 }
 
 const DAY_MS = 24 * 60 * 60_000;
 
+function ageText(at: number, now: number): string {
+  const days = Math.floor((now - at) / DAY_MS);
+  if (days >= 1) return `${days} day${days === 1 ? '' : 's'} old`;
+  const hours = Math.floor((now - at) / (60 * 60_000));
+  return hours >= 1 ? `${hours} hour${hours === 1 ? '' : 's'} old` : 'from the last hour';
+}
+
+const MORE: Partial<Record<PlanId, string>> = {
+  free: ' Pro gives 30 fresh checks a month.',
+};
+
 /** What a user should know about where this result came from. */
-export function planNotes(report: Pick<ScanReport, 'plan' | 'communitySource' | 'communityFrom' | 'checked'>, now = Date.now()): string[] {
+export function planNotes(report: Pick<ScanReport, 'plan' | 'communitySource' | 'communityFrom' | 'checked' | 'capped'>, now = Date.now()): string[] {
   const notes: string[] = [];
-  if (report.communitySource === 'skipped') {
-    notes.push('Today’s free community checks are used up, so this Free scan shows Security and Foundation only. Pro checks Community straight away.');
+  const more = MORE[report.plan] ?? '';
+  if (report.capped && report.communitySource === 'skipped') {
+    notes.push(`This month’s fresh community checks are used up and nobody has scanned this token before, so this scan shows Security and Foundation only. Security ran fresh.${more}`);
+  } else if (report.capped && report.checked.community !== undefined) {
+    notes.push(`This month’s fresh community checks are used up, so Community and Foundation come from a saved scan ${ageText(report.checked.community, now)}. Security ran fresh.${more}`);
   }
   if (report.communityFrom === 'basic') {
-    notes.push('Basic community check: followers, the latest post and how often the token was mentioned this week. Pro also reads who is talking about it.');
-  }
-  const at = report.checked.community;
-  if (report.communitySource === 'library' && at !== undefined) {
-    const days = Math.floor((now - at) / DAY_MS);
-    if (days >= 3) notes.push(`Community is from a saved scan ${days} days old. Pro checks it again.`);
+    notes.push('Basic community check: followers, the latest post and how often the token was mentioned this week. A full check also reads who is talking about it.');
   }
   return notes;
 }
@@ -118,7 +129,8 @@ export async function scanReport(
     communitySource: lookup.communitySource,
     communityFrom: lookup.communityFrom,
     secondOpinion: lookup.secondOpinion,
-    notes: planNotes({ plan: (options.plan ?? PLANS.pro).id, communitySource: lookup.communitySource, communityFrom: lookup.communityFrom, checked: lookup.checked }),
+    capped: lookup.capped,
+    notes: planNotes({ plan: (options.plan ?? PLANS.pro).id, communitySource: lookup.communitySource, communityFrom: lookup.communityFrom, checked: lookup.checked, capped: lookup.capped }),
   };
 }
 
