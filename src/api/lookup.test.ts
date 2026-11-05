@@ -64,7 +64,29 @@ describe('lookupToken', () => {
     expect(lookup).toMatchObject({ address: EVM, chain: { name: 'Base' }, name: 'Pepe', symbol: 'PEPE', failures: [] });
     expect(lookup.signals).toMatchObject({ chain: 'evm', liquidityUsd: 80_000, mintable: true, clusterPct: 12 });
     expect(lookup.foundation.score).toBeGreaterThan(0);
-    expect(fetchMock).toHaveBeenCalledTimes(8);
+    // GoPlus gave no sell test, so Honeypot.is is asked for one (it isn't served here, so still unknown).
+    expect(fetchMock).toHaveBeenCalledTimes(9);
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes('honeypot.is'))).toBe(true);
+    expect(lookup.signals.honeypotRisk).toBeUndefined();
+  });
+
+  it('fills in a passed sell test from Honeypot.is when GoPlus has none, and skips it when GoPlus has one', async () => {
+    const withSellTest = (goPlus: Record<string, string>) =>
+      serve({
+        [`/token-pairs/v1/ethereum/${EVM}`]: [pepePair('ethereum', 80_000)],
+        [`/token-pairs/v1/base/${EVM}`]: [],
+        [`/token-pairs/v1/bsc/${EVM}`]: [],
+        [`/token_security/1?contract_addresses=${EVM}`]: { code: 1, result: { [EVM.toLowerCase()]: goPlus } },
+        'honeypot.is': { simulationSuccess: true, honeypotResult: { isHoneypot: false } },
+        'search/recent': noMentions,
+      });
+
+    withSellTest({});
+    expect((await lookupToken(EVM)).signals.honeypotRisk).toBe(0);
+
+    const fetchMock = withSellTest({ is_honeypot: '0' });
+    expect((await lookupToken(EVM)).signals.honeypotRisk).toBe(0);
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes('honeypot.is'))).toBe(false);
   });
 
   it('only looks on Solana for a Solana address, and finds the token on either side of a pair', async () => {
@@ -362,8 +384,9 @@ describe('lookupToken on each plan', () => {
     calls.length = 0;
     const pro = await lookupToken(EVM, undefined, 'eth', {}, false, { plan: PLANS.pro });
     expect(calls.find((url) => url.includes('search/recent'))).toContain('max_results=10');
-    expect(calls.some((url) => url.includes('honeypot.is'))).toBe(false);
+    // Pro gets no second opinion; it only asks Honeypot.is for the sell test GoPlus left out.
     expect(pro.secondOpinion).toBeUndefined();
+    expect(pro.signals.honeypotRisk).toBe(100);
   });
 });
 

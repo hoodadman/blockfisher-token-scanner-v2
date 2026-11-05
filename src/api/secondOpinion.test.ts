@@ -10,8 +10,15 @@ describe('readHoneypot', () => {
 
   it('finds nothing on a clean token', () => {
     const { signals, opinion } = readHoneypot({ simulationSuccess: true, honeypotResult: { isHoneypot: false }, simulationResult: { buyTax: 0, sellTax: 0, transferTax: 0 } });
-    expect(signals.honeypotRisk).toBeUndefined();
+    expect(signals.honeypotRisk).toBe(0);
     expect(opinion).toEqual({ source: 'Honeypot.is', ok: true, findings: [] });
+  });
+});
+
+describe('readHoneypot without a result', () => {
+  it('leaves the sell test unknown when the simulation couldn’t run', () => {
+    expect(readHoneypot({ simulationSuccess: false }).signals.honeypotRisk).toBeUndefined();
+    expect(readHoneypot({}).signals.honeypotRisk).toBeUndefined();
   });
 });
 

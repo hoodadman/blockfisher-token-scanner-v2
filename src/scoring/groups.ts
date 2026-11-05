@@ -118,7 +118,24 @@ export function groupSecurity(report: TrustReport): GroupedCheck[] {
     const foundUnknown = group.checks.map((id) => unknown.get(id)).filter((item): item is CheckSummary => Boolean(item));
     if (foundIssues.length + foundPassed.length + foundUnknown.length === 0) continue;
 
-    const worst = [...foundIssues].sort((a, b) => SEVERITY_RANK[a.severity] - SEVERITY_RANK[b.severity])[0];
+    const found = foundIssues.filter((issue) => !issue.unconfirmed);
+    const unchecked = foundIssues.find((issue) => issue.unconfirmed);
+    const worst = [...found].sort((a, b) => SEVERITY_RANK[a.severity] - SEVERITY_RANK[b.severity])[0];
+    // A check that couldn't run is an unknown, not a problem found: it must not read as "you can't".
+    if (!worst && unchecked) {
+      rows.push({
+        id: group.id,
+        label: group.label,
+        status: 'unknown',
+        summary: unchecked.summary,
+        details: [unchecked.details, foundPassed.length ? `${foundPassed.length} related check${foundPassed.length === 1 ? '' : 's'} looked fine.` : '']
+          .filter(Boolean)
+          .join(' '),
+        severity: unchecked.severity,
+        experimental: unchecked.experimental,
+      });
+      continue;
+    }
     if (worst) {
       rows.push({
         id: group.id,

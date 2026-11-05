@@ -105,6 +105,8 @@ export interface Issue {
   details: string;
   /** Set when this issue forces the score to 0. */
   fatal?: boolean;
+  /** Set when the check couldn't run: the issue is the missing answer, not a problem found. */
+  unconfirmed?: boolean;
 }
 
 export interface CheckSummary {

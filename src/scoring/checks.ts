@@ -93,9 +93,13 @@ export const CHECKS: readonly CheckDefinition[] = [
     ifUnknown: (s) => ({
       severity: 'warning',
       points: 30,
-      title: s.chain === 'solana' ? 'We can’t test selling on Solana yet' : 'Sell test couldn’t run',
-      summary: 'We couldn’t confirm that this token can be sold.',
-      details: tooltipFor('honeypot'),
+      title: s.chain === 'solana' ? 'Sell test not available on Solana yet' : 'Sell test couldn’t run',
+      summary:
+        s.chain === 'solana'
+          ? 'We don’t have a sell test for Solana tokens yet, so selling is unchecked. This does not mean you can’t sell.'
+          : 'Our sell test couldn’t run on this token, so selling is unchecked. This does not mean you can’t sell.',
+      details:
+        'A sell test simulates buying and then selling the token. When it can’t run (often for very new or thinly traded tokens), we can’t say either way, so we take a few points off rather than call it safe. A failed sell test is different: that scores 0.',
     }),
   },
   {
