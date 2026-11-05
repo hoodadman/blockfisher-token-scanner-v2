@@ -450,7 +450,14 @@
   font-size: 13px;
   font-weight: 400;
   line-height: 1.45;
+  letter-spacing: normal;
   text-align: left;
+  text-transform: none;
+}
+
+.tip--start {
+  right: auto;
+  left: 0;
 }
 
 .tip[hidden] {

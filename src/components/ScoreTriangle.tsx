@@ -1,5 +1,6 @@
-import { useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import { toneFor, type ScoreTone } from '../scoring';
+import { PILLAR_HELP } from './pillarHelp';
 import './ScoreTriangle.css';
 
 export interface PillarScore {
@@ -37,9 +38,26 @@ const ANGLES: Record<PillarScore['id'], number> = {
 export function ScoreTriangle({ overall, pillars }: ScoreTriangleProps) {
   const [hover, setHover] = useState<string | null>(null);
   const tone = toneFor(overall);
+  const helpId = useId();
+  const box = useRef<HTMLElement>(null);
+
+  // A tapped petal stays open until the next tap elsewhere, or Escape.
+  useEffect(() => {
+    if (!hover) return;
+    const onKeyDown = (event: KeyboardEvent) => event.key === 'Escape' && setHover(null);
+    const onPointerDown = (event: PointerEvent) => {
+      if (!(event.target instanceof Element) || !event.target.closest('.tri-petal') || !box.current?.contains(event.target)) setHover(null);
+    };
+    document.addEventListener('keydown', onKeyDown);
+    document.addEventListener('pointerdown', onPointerDown);
+    return () => {
+      document.removeEventListener('keydown', onKeyDown);
+      document.removeEventListener('pointerdown', onPointerDown);
+    };
+  }, [hover]);
 
   return (
-    <section className={`tri tri--${tone}`} aria-label="Overall token score">
+    <section ref={box} className={`tri tri--${tone}`} aria-label="Overall token score">
       <svg className="tri__svg" viewBox="0 0 360 340" role="presentation">
         {pillars.map((pillar) => {
           const angle = ANGLES[pillar.id];
@@ -65,9 +83,11 @@ export function ScoreTriangle({ overall, pillars }: ScoreTriangleProps) {
                   ? `${pillar.label}: no score yet`
                   : `${pillar.label}: ${pillar.score} out of 100`
               }
+              aria-describedby={`${helpId}-${pillar.id}`}
               onPointerEnter={(event) => event.pointerType === 'mouse' && setHover(pillar.id)}
+              onPointerUp={(event) => event.pointerType !== 'mouse' && setHover((value) => (value === pillar.id ? null : pillar.id))}
               onPointerLeave={(event) => event.pointerType === 'mouse' && setHover((value) => (value === pillar.id ? null : value))}
-              onFocus={() => setHover(pillar.id)}
+              onFocus={(event) => event.currentTarget.matches(':focus-visible') && setHover(pillar.id)}
               onBlur={() => setHover((value) => (value === pillar.id ? null : value))}
             >
               <polygon className="tri-petal__track" points={points(tip, left, right)} />
@@ -102,16 +122,21 @@ export function ScoreTriangle({ overall, pillars }: ScoreTriangleProps) {
         if (hover !== pillar.id) return null;
         const angle = ANGLES[pillar.id];
         const spot = polar((INNER + TIP) / 2, angle);
+        // Centred across the triangle at the petal's height, so the longer text never runs off a phone screen.
         return (
-          <p
-            key={`${pillar.id}-hover`}
-            className="tri__hover"
-            style={{ left: `${(spot.x / 360) * 100}%`, top: `${(spot.y / 340) * 100}%` }}
-          >
-            {pillar.score === null ? 'No score yet' : `${pillar.score} / 100`}
-          </p>
+          <div key={`${pillar.id}-hover`} className="tri__hover" style={{ top: `${(spot.y / 340) * 100}%` }} aria-hidden="true">
+            <strong>
+              {pillar.label}: {pillar.score === null ? 'no score yet' : `${pillar.score} / 100`}
+            </strong>
+            <span>{PILLAR_HELP[pillar.id]}</span>
+          </div>
         );
       })}
+      {pillars.map((pillar) => (
+        <span key={`${pillar.id}-help`} id={`${helpId}-${pillar.id}`} className="tri__sr">
+          {PILLAR_HELP[pillar.id]}
+        </span>
+      ))}
     </section>
   );
 }
