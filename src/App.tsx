@@ -165,6 +165,12 @@ function Result({ report: scan, onRecheck }: { report: ScanReport; onRecheck: ()
 
   return (
     <div className="result">
+      {scan.capAlert && (
+        <p className="notice notice--cap" role="status">
+          {scan.capAlert}
+        </p>
+      )}
+
       <div className="token">
         <p className="token__name">
           {name ?? 'Unnamed token'}
