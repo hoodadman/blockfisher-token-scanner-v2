@@ -14,6 +14,8 @@ interface DexScreenerToken {
  */
 export interface DexScreenerPair {
   chainId: string;
+  /** The pool's own address; with chainId it makes the pair's DexScreener link. */
+  pairAddress?: string;
   baseToken?: DexScreenerToken;
   quoteToken?: DexScreenerToken;
   liquidity?: { usd?: number | null } | null;
@@ -61,6 +63,37 @@ export function tokenFromDexScreener(pairs: readonly DexScreenerPair[], address:
     if (token) return { name: token.name, symbol: token.symbol };
   }
   return {};
+}
+
+/** EVM (0x + 40 hex) or Solana (base58) addresses; anything else is never put in a link. */
+const ADDRESS = /^(0x[0-9a-fA-F]{40}|[1-9A-HJ-NP-Za-km-z]{32,44})$/;
+const CHAIN_ID = /^[a-z0-9-]{1,30}$/;
+
+export interface DexLinks {
+  /** The token's DexScreener page, built from its contract address. */
+  token: string;
+  /** The DexScreener page of its deepest pool, when DexScreener names one. */
+  pair?: string;
+}
+
+/**
+ * The DexScreener links for a token, saved with its X data and used to find posts that
+ * link to it. Built from addresses, never copied from a URL a caller sent.
+ */
+export function dexLinksFor(pairs: readonly DexScreenerPair[], address: string): DexLinks | undefined {
+  const wanted = address.toLowerCase();
+  const own = pairs.filter(
+    (pair) => CHAIN_ID.test(pair.chainId) && [pair.baseToken, pair.quoteToken].some((side) => side?.address?.toLowerCase() === wanted),
+  );
+  const chainId = own[0]?.chainId ?? pairs.find((pair) => CHAIN_ID.test(pair.chainId))?.chainId;
+  if (!chainId || !ADDRESS.test(address)) return undefined;
+  const deepest = own
+    .filter((pair) => pair.chainId === chainId && pair.pairAddress && ADDRESS.test(pair.pairAddress))
+    .sort((a, b) => (b.liquidity?.usd ?? 0) - (a.liquidity?.usd ?? 0))[0];
+  return {
+    token: `https://dexscreener.com/${chainId}/${address}`,
+    ...(deepest && { pair: `https://dexscreener.com/${chainId}/${deepest.pairAddress}` }),
+  };
 }
 
 const HANDLE = /^[A-Za-z0-9_]{1,15}$/;

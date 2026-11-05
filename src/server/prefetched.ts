@@ -34,6 +34,7 @@ function pair(value: unknown): DexScreenerPair | undefined {
   const info = record(raw.info);
   return {
     chainId,
+    pairAddress: text(raw.pairAddress, 64),
     baseToken: token(raw.baseToken),
     quoteToken: token(raw.quoteToken),
     liquidity: { usd: number(record(raw.liquidity)?.usd) },

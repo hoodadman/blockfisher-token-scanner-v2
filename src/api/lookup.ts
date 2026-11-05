@@ -4,6 +4,7 @@ import {
   exchangeIdsFromCoinGecko,
   goPlusChainId,
   ownLinksOnly,
+  dexLinksFor,
   tokenFromDexScreener,
   tokenFromGoPlus,
   twitterHandleFromDexScreener,
@@ -242,7 +243,8 @@ export async function lookupToken(
     choice = choose(plan, options.library && fresh ? sameAccount(await readLibrary(chain.network, address), twitter) : shelf, communityAge, Date.now(), true);
   }
   const reading = 'fetch' in choice || 'expand' in choice;
-  const who = { handle: twitter, name: identity.name, symbol: identity.symbol };
+  const dex = dexLinksFor(pairs, address);
+  const who = { handle: twitter, name: identity.name, symbol: identity.symbol, address, dexPair: dex?.pair };
   let communitySource: TokenLookup['communitySource'];
   let communityFrom: Source | undefined;
   let communityWork: Promise<TwitterBundle | undefined>;
@@ -309,7 +311,12 @@ export async function lookupToken(
   const bundle = twitterBundle.status === 'fulfilled' ? twitterBundle.value : undefined;
   // Whatever this scan paid for goes back in the library for everyone else.
   if (bundle && communitySource !== 'library' && communitySource !== 'skipped' && options.library) {
-    await writeLibrary(chain.network, address, plan.depth, { savedAt: bundle.checkedAt ?? Date.now(), plan: plan.id, bundle });
+    await writeLibrary(chain.network, address, plan.depth, {
+      savedAt: bundle.checkedAt ?? Date.now(),
+      plan: plan.id,
+      bundle,
+      token: { network: chain.network, address, ...(dex && { dex }) },
+    });
   }
 
   return {
