@@ -38,34 +38,28 @@ export interface Plan {
   /** What the plan gives, for the plan picker. */
   features: readonly string[];
   /**
-   * Where Community (and the X part of Foundation) comes from.
-   * 'library': the latest saved result of any age, from any earlier scan.
-   * 'shared': an answer no older than the share age (share.ts), else a fresh one.
+   * Fresh Community + Foundation checks (new X reads) a member gets each calendar month
+   * (UTC). Serving a saved or shared result doesn't use one. Once they are used up, scans
+   * show the newest saved result of any age instead (library.ts `choose`). Security is
+   * never capped: it runs fresh on every scan. Counted per account, kept in the library's
+   * store (server/api.ts).
    */
-  community: 'library' | 'shared';
+  freshPerMonth: number;
   /** Oldest shared community answer accepted, in seconds; undefined uses share.ts. */
   communityMaxAge?: number;
   /** Oldest shared holder answer accepted, in seconds; undefined uses share.ts. */
   holdersMaxAge?: number;
   x: XDepth;
-  /**
-   * What a scan does for Community when the library has nothing for the token: a full
-   * check at `x`, or Free's basic one (followers, latest post, mention count; about $0.02),
-   * limited per user and by a shared daily budget (server/api.ts).
-   */
-  whenUnscanned: 'full' | 'basic';
   /** Which of the two depths `x` is; results are saved in the library under it. */
   depth: Depth;
   /** Second-opinion security checks (Honeypot.is on EVM, RugCheck on Solana). */
   extraSecurity: boolean;
   /** Re-checks allowed per client in 10 minutes; 0 means no Re-check. */
   rechecks: number;
-  /**
-   * Scans a client may make each day that cost us X calls. For Free, basic checks on
-   * tokens nobody has scanned; for Ultra, deep scans (after that, Pro depth).
-   */
-  paidScansPerDay?: number;
 }
+
+/** Scans any one account (or, without one, any one client) may run an hour, on every plan. */
+export const SCANS_PER_HOUR = 60;
 
 /** Pro's X depth, worked out in PR #7: 99% of community scores within 2 points of 50 posts. */
 const STANDARD_X: XDepth = { mentions: 10, ownPosts: 15, bioPeople: 5 };
@@ -79,16 +73,14 @@ export const PLANS: Readonly<Record<PlanId, Plan>> = {
     features: [
       'Security checks run fresh on every scan',
       'Liquidity and market data are live',
-      'Community from the latest saved scan, with its date',
-      'A basic community check on 5 tokens a day that nobody has scanned yet',
+      '4 fresh community checks a month, at Pro depth',
+      'After that, community from the latest saved scan, with its date',
     ],
-    community: 'library',
+    freshPerMonth: 4,
     x: STANDARD_X,
-    whenUnscanned: 'basic',
     depth: 'pro',
     extraSecurity: false,
     rechecks: 0,
-    paidScansPerDay: 5,
   },
   pro: {
     id: 'pro',
@@ -97,13 +89,12 @@ export const PLANS: Readonly<Record<PlanId, Plan>> = {
     tagline: 'Up-to-date community checks and Re-check.',
     features: [
       'Everything in Free',
-      'Community never more than a day old (12 hours for new tokens)',
+      '30 fresh community checks a month',
+      'Community never more than a day old (12 hours for new tokens) while you have checks left',
       'Re-check any token for a fresh result',
-      'Community checked on tokens nobody has scanned yet',
     ],
-    community: 'shared',
+    freshPerMonth: 30,
     x: STANDARD_X,
-    whenUnscanned: 'full',
     depth: 'pro',
     extraSecurity: false,
     rechecks: 5,
@@ -117,29 +108,22 @@ export const PLANS: Readonly<Record<PlanId, Plan>> = {
       'Everything in Pro',
       'Three times more of X read for the community score',
       'Second-opinion security checks (Honeypot.is, RugCheck)',
+      '30 fresh deep community checks a month',
       'Community at most 6 hours old, holders at most 10 minutes',
-      '20 deep scans a day, then Pro depth',
     ],
-    community: 'shared',
+    freshPerMonth: 30,
     communityMaxAge: 6 * 60 * 60,
     holdersMaxAge: 10 * 60,
     x: { mentions: 30, ownPosts: 30, bioPeople: 10 },
-    whenUnscanned: 'full',
     depth: 'ultra',
     extraSecurity: true,
     rechecks: 10,
-    paidScansPerDay: 20,
   },
 };
 
 /** Unknown or missing values are Pro, so callers that predate plans (the extension) keep working. */
 export function planFrom(value: unknown): Plan {
   return typeof value === 'string' && (PLAN_IDS as readonly string[]).includes(value) ? PLANS[value as PlanId] : PLANS.pro;
-}
-
-/** Ultra past its daily deep scans: the same plan at Pro's depth, without the extras. */
-export function atProDepth(plan: Plan): Plan {
-  return { ...plan, x: PLANS.pro.x, depth: 'pro', extraSecurity: false, communityMaxAge: undefined, holdersMaxAge: undefined };
 }
 
 /** Worst-case X cost of one fresh community check, in dollars (every post by a new author). */

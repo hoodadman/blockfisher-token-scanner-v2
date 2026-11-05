@@ -22,7 +22,7 @@ import type { TokenSignals } from '../scoring';
 import { apiHosts } from './hosts';
 import { SHARE_HEADER, savedAt, shareSeconds } from './share';
 import { chatLinksFromDexScreener, fetchChatCounts } from './chats';
-import { BASIC_CHECK_MAX_COST, communityFromBundle, expandTwitterBundle, fetchBasicBundle, fetchTwitterBundle, TwitterError, type TwitterBundle } from './twitter';
+import { communityFromBundle, expandTwitterBundle, fetchTwitterBundle, TwitterError, type TwitterBundle } from './twitter';
 import { fetchSecondOpinion, worseOf, type SecondOpinion } from './secondOpinion';
 import { choose, readLibrary, writeLibrary, type LibraryEntry, type Shelf } from '../plans/library';
 import { PLANS, type Plan, type Source } from '../plans/plans';
@@ -101,13 +101,16 @@ export interface TokenLookup {
   checked: { community?: number; holders?: number };
   /**
    * Where Community came from: fetched (fresh or a shared answer), the library, a saved
-   * Pro result read on to Ultra depth ('expanded'), or nowhere ('skipped').
+   * Pro result read on to Ultra depth ('expanded'), or nowhere ('skipped': this month's
+   * fresh checks are used up and nothing is saved). 'basic' is an older Free check.
    */
   communitySource: 'fetched' | 'library' | 'expanded' | 'basic' | 'skipped';
   /** The X data behind Community: a full check at either depth, or a basic one. */
   communityFrom?: Source;
   /** Ultra's second-opinion security checks, when they ran. */
   secondOpinion?: SecondOpinion;
+  /** True when this scan wanted a fresh community check but the month's are used up. */
+  capped: boolean;
 }
 
 export interface LookupOptions {
@@ -116,12 +119,14 @@ export interface LookupOptions {
   /** Read and write the scan library (server only; see plans/library.ts). */
   library?: boolean;
   /**
-   * Asked before a basic check (Free, token nobody has scanned) with its most it can cost:
-   * true goes ahead, false skips Community. The scan then calls `spent` with what it cost.
-   * Without it, basic checks always run (the browser and tests).
+   * Asked before a scan reads X afresh for Community and Foundation (a fresh check, or
+   * reading on from a saved Pro result): true goes ahead and uses one of the month's fresh
+   * checks; false shows the newest saved result instead (library.ts `choose`, capped).
+   * The scan then calls `fetchDone` saying whether X answered, so a failed read can be
+   * given back. Without it, fresh checks always run (the browser and tests).
    */
-  mayCheckBasic?: (maxCost: number) => Promise<boolean>;
-  spent?: (cost: number) => void;
+  mayFetch?: () => Promise<boolean>;
+  fetchDone?: (read: boolean) => void;
 }
 
 class HttpError extends Error {
@@ -229,7 +234,14 @@ export async function lookupToken(
   // What others already paid for comes first (library.ts `choose`); a re-check always fetches.
   const communityAge = capped(shareSeconds('community', launchedAt, fresh), plan.communityMaxAge);
   const shelf = options.library && !fresh ? sameAccount(await readLibrary(chain.network, address), twitter) : {};
-  const choice = choose(plan, shelf, communityAge);
+  let choice = choose(plan, shelf, communityAge);
+  let wasCapped = false;
+  if (('fetch' in choice || 'expand' in choice) && options.mayFetch && !(await options.mayFetch())) {
+    // This month's fresh checks are used up: the newest saved result, whatever its age.
+    wasCapped = true;
+    choice = choose(plan, options.library && fresh ? sameAccount(await readLibrary(chain.network, address), twitter) : shelf, communityAge, Date.now(), true);
+  }
+  const reading = 'fetch' in choice || 'expand' in choice;
   const who = { handle: twitter, name: identity.name, symbol: identity.symbol };
   let communitySource: TokenLookup['communitySource'];
   let communityFrom: Source | undefined;
@@ -248,27 +260,27 @@ export async function lookupToken(
       communityFrom = 'pro';
       return base;
     });
-  } else if (plan.whenUnscanned === 'basic') {
-    // Free on a token nobody has scanned: a basic check, if today's limits allow.
-    const allowed = options.mayCheckBasic ? await options.mayCheckBasic(BASIC_CHECK_MAX_COST) : true;
-    communitySource = allowed ? 'basic' : 'skipped';
-    communityFrom = allowed ? 'basic' : undefined;
-    communityWork = allowed
-      ? fetchBasicBundle(who, signal, communityAge).then(
-          ({ bundle, cost }) => {
-            options.spent?.(cost);
-            return bundle;
-          },
-          (error: unknown) => {
-            options.spent?.(0);
-            throw error;
-          },
-        )
-      : Promise.resolve(undefined);
+  } else if ('none' in choice) {
+    communitySource = 'skipped';
+    communityWork = Promise.resolve(undefined);
   } else {
     communitySource = 'fetched';
     communityFrom = plan.depth;
     communityWork = fetchTwitterBundle(who, signal, communityAge, plan.x);
+  }
+  if (reading && options.fetchDone) {
+    const done = options.fetchDone;
+    communityWork = communityWork.then(
+      (bundle) => {
+        // An expand that fell back to the saved Pro result read nothing new.
+        done(communitySource !== 'library');
+        return bundle;
+      },
+      (error: unknown) => {
+        done(false);
+        throw error;
+      },
+    );
   }
 
   // Security runs on every scan, on every plan: it is what changes fastest when a token is rugged.
@@ -297,8 +309,7 @@ export async function lookupToken(
   const bundle = twitterBundle.status === 'fulfilled' ? twitterBundle.value : undefined;
   // Whatever this scan paid for goes back in the library for everyone else.
   if (bundle && communitySource !== 'library' && communitySource !== 'skipped' && options.library) {
-    const shelf = communitySource === 'basic' ? 'basic' : plan.depth;
-    await writeLibrary(chain.network, address, shelf, { savedAt: bundle.checkedAt ?? Date.now(), plan: plan.id, bundle });
+    await writeLibrary(chain.network, address, plan.depth, { savedAt: bundle.checkedAt ?? Date.now(), plan: plan.id, bundle });
   }
 
   return {
@@ -328,6 +339,7 @@ export async function lookupToken(
     communitySource,
     communityFrom,
     secondOpinion: secondOpinion?.opinion,
+    capped: wasCapped,
   };
 }
 

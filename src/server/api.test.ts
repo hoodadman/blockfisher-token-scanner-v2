@@ -107,43 +107,91 @@ describe('plans', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it('says which plan ran, and runs Ultra at Pro depth once its deep scans are used up', async () => {
+  it('says which plan ran', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response(null, { status: 404 })));
-    let last: { report: { plan: string; notes: string[] } } | undefined;
-    for (let i = 1; i <= 21; i++) {
-      // A different token each time, so the result cache doesn't answer.
-      const address = `0x${i.toString(16).padStart(40, '0')}`;
-      const reply = await handleScan({ address, network: 'eth', plan: 'ultra', pairs: [{ chainId: 'ethereum', baseToken: { address }, liquidity: { usd: 1 } }] }, 'ultra-client');
-      last = reply.body as typeof last;
-      if (i === 1) expect(last?.report.notes).toEqual([]);
-    }
-    expect(last?.report.plan).toBe('ultra');
-    expect(last?.report.notes.join(' ')).toMatch(/Pro depth/);
+    const address = `0x${'e'.repeat(40)}`;
+    const reply = await handleScan({ address, network: 'eth', plan: 'ultra', pairs: [{ chainId: 'ethereum', baseToken: { address }, liquidity: { usd: 1 } }] }, 'ultra-client');
+    const body = reply.body as { report: { plan: string; notes: string[] }; freshChecks: { limit: number } };
+    expect(body.report.plan).toBe('ultra');
+    expect(body.report.notes).toEqual([]);
+    expect(body.freshChecks.limit).toBe(30);
   });
 });
 
-describe('Free basic checks', () => {
-  it('stop once the shared daily budget is spent, but Security still runs', async () => {
+const tokenWithX = (i: number) => {
+  const address = `0x${i.toString(16).padStart(40, '0')}`;
+  return {
+    address,
+    network: 'eth',
+    pairs: [{ chainId: 'ethereum', baseToken: { address, name: `Token ${i}`, symbol: `T${i}` }, liquidity: { usd: 1 }, info: { socials: [{ type: 'twitter', url: `https://x.com/token${i}` }] } }],
+  };
+};
+
+const recording = (calls: string[]) =>
+  vi.fn(async (input: RequestInfo | URL) => {
+    const url = String(input);
+    calls.push(url);
+    if (url.includes('search/recent')) return Response.json({ data: [], meta: { result_count: 0 } });
+    return new Response(null, { status: 404 });
+  });
+
+describe('monthly fresh community checks', () => {
+  it('Free gets 4 a month; after that Community is capped, but Security still runs on every scan', async () => {
+    const { resetLimits } = await import('./api');
+    resetLimits();
+    const calls: string[] = [];
+    vi.stubGlobal('fetch', recording(calls));
+    for (let i = 101; i <= 104; i++) {
+      const reply = await handleScan({ ...tokenWithX(i), plan: 'free' }, 'free-monthly');
+      expect((reply.body as { report: { communitySource: string } }).report.communitySource).toBe('fetched');
+    }
+    calls.length = 0;
+    const fifth = await handleScan({ ...tokenWithX(105), plan: 'free' }, 'free-monthly');
+    const body = fifth.body as { report: { communitySource: string; capped: boolean; notes: string[] }; freshChecks: { used: number; left: number } };
+    expect(body.report).toMatchObject({ communitySource: 'skipped', capped: true });
+    expect(body.report.notes.join(' ')).toMatch(/fresh community checks are used up.*Security ran fresh/);
+    expect(body.freshChecks).toMatchObject({ used: 4, left: 0 });
+    expect(calls.some((url) => url.includes('/api/twitter'))).toBe(false);
+    expect(calls.some((url) => url.includes('gopluslabs'))).toBe(true);
+    // Someone else's month is their own.
+    const other = await handleScan({ ...tokenWithX(105), plan: 'free' }, 'free-other');
+    expect((other.body as { report: { communitySource: string } }).report.communitySource).toBe('fetched');
+    resetLimits();
+  });
+
+  it('Pro gets 30 a month, and a Re-check is turned down once they are used up', async () => {
+    const { resetLimits } = await import('./api');
+    resetLimits();
+    vi.stubGlobal('fetch', recording([]));
+    for (let i = 201; i <= 230; i++) await handleScan({ ...tokenWithX(i), plan: 'pro' }, 'pro-monthly');
+    const next = await handleScan({ ...tokenWithX(231), plan: 'pro' }, 'pro-monthly');
+    expect((next.body as { report: { capped: boolean } }).report.capped).toBe(true);
+    const recheck = await handleScan({ ...tokenWithX(201), plan: 'pro', refresh: true }, 'pro-monthly');
+    expect(recheck.status).toBe(429);
+    resetLimits();
+  });
+
+  it('Free users together also stop at the shared daily budget', async () => {
     const { resetLimits } = await import('./api');
     resetLimits(0.01);
-    const address = `0x${'f'.repeat(40)}`;
     const calls: string[] = [];
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async (input: RequestInfo | URL) => {
-        calls.push(String(input));
-        return new Response(null, { status: 404 });
-      }),
-    );
-    const reply = await handleScan(
-      { address, network: 'eth', plan: 'free', pairs: [{ chainId: 'ethereum', baseToken: { address }, liquidity: { usd: 1 }, info: { socials: [{ type: 'twitter', url: 'https://x.com/sometoken' }] } }] },
-      'free-client',
-    );
-    const body = reply.body as { report: { communitySource: string; notes: string[] } };
-    expect(body.report.communitySource).toBe('skipped');
-    expect(body.report.notes.join(' ')).toMatch(/free community checks are used up/);
-    expect(calls.some((url) => url.includes('/api/twitter') || url.includes('twitter.com'))).toBe(false);
+    vi.stubGlobal('fetch', recording(calls));
+    const reply = await handleScan({ ...tokenWithX(301), plan: 'free' }, 'free-budget');
+    expect((reply.body as { report: { communitySource: string } }).report.communitySource).toBe('skipped');
+    expect(calls.some((url) => url.includes('/api/twitter'))).toBe(false);
     expect(calls.some((url) => url.includes('gopluslabs'))).toBe(true);
+    resetLimits();
+  });
+});
+
+describe('the hourly limit', () => {
+  it('allows 60 scans an hour on every plan, counting answers from the cache', async () => {
+    const { resetLimits } = await import('./api');
+    resetLimits();
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(null, { status: 404 })));
+    const token = tokenWithX(401);
+    for (let i = 0; i < 60; i++) expect((await handleScan({ ...token, plan: 'ultra' }, 'hourly')).status).toBe(200);
+    expect((await handleScan({ ...token, plan: 'ultra' }, 'hourly')).status).toBe(429);
     resetLimits();
   });
 });
