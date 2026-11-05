@@ -259,67 +259,71 @@ describe('lookupToken on each plan', () => {
     const profile = { id: '9', handle: 'someoneelse', followers: 1_000_000, urls: [], mentions: [] };
     await writeLibrary('eth', EVM, 'pro', { savedAt: Date.now(), plan: 'pro', bundle: { profile, tweets: [], mentionedPeople: [], mentions: [] } });
 
-    const free = await lookupToken(EVM, undefined, 'eth', {}, false, { plan: PLANS.free, library: true, mayCheckBasic: async () => false });
+    const free = await lookupToken(EVM, undefined, 'eth', {}, false, { plan: PLANS.free, library: true, mayFetch: async () => false });
     expect(free.communitySource).toBe('skipped');
   });
 
-  it('Free skips Community on a token nobody has scanned when today\'s limits say no, without calling X', async () => {
+  it('with the month\'s fresh checks used up, a token nobody has scanned shows no Community, without calling X', async () => {
     const { PLANS } = await import('../plans/plans');
     const { setLibraryStore, memoryLibrary } = await import('../plans/library');
     setLibraryStore(memoryLibrary());
     const calls: string[] = [];
     vi.stubGlobal('fetch', routes(calls));
-    const free = await lookupToken(EVM, undefined, 'eth', {}, false, { plan: PLANS.free, library: true, mayCheckBasic: async () => false });
-    expect(free.communitySource).toBe('skipped');
+    const free = await lookupToken(EVM, undefined, 'eth', {}, false, { plan: PLANS.free, library: true, mayFetch: async () => false });
+    expect(free).toMatchObject({ communitySource: 'skipped', capped: true });
     expect(free.community).toBeUndefined();
     expect(calls.some((url) => url.includes('/api/twitter'))).toBe(false);
+    // Security is never capped.
     expect(calls.some((url) => url.includes('/token_security/'))).toBe(true);
   });
 
-  it('Free runs a basic check on a token nobody has scanned, saves it for Free only, and scores it cautiously', async () => {
+  it('Free with checks left reads X at Pro depth and uses one; a saved result uses none', async () => {
     const { PLANS } = await import('../plans/plans');
     const { setLibraryStore, memoryLibrary } = await import('../plans/library');
     setLibraryStore(memoryLibrary());
     const calls: string[] = [];
-    const spent: number[] = [];
+    vi.stubGlobal('fetch', routes(calls));
+    let asked = 0;
+    const done: boolean[] = [];
+    const counted = { mayFetch: async () => (asked++, true), fetchDone: (read: boolean) => done.push(read) };
+
+    const first = await lookupToken(EVM, undefined, 'eth', {}, false, { plan: PLANS.free, library: true, ...counted });
+    expect(first).toMatchObject({ communitySource: 'fetched', communityFrom: 'pro', capped: false });
+    expect(calls.some((url) => url.includes('search/recent') && url.includes(`max_results=${PLANS.pro.x.mentions}`))).toBe(true);
+    expect([asked, done]).toEqual([1, [true]]);
+
+    calls.length = 0;
+    const again = await lookupToken(EVM, undefined, 'eth', {}, false, { plan: PLANS.free, library: true, ...counted });
+    expect(again).toMatchObject({ communitySource: 'library', capped: false });
+    expect(asked).toBe(1);
+    expect(calls.some((url) => url.includes('/api/twitter'))).toBe(false);
+  });
+
+  it('once capped, a Re-check shows the newest saved result instead of reading X', async () => {
+    const { PLANS } = await import('../plans/plans');
+    const { setLibraryStore, memoryLibrary, writeLibrary } = await import('../plans/library');
+    setLibraryStore(memoryLibrary());
+    const profile = { id: '1', handle: 'pepecoineth', followers: 500_000, urls: [], mentions: [] };
+    const savedAt = Date.now() - 40 * 24 * 3600_000;
+    await writeLibrary('eth', EVM, 'ultra', { savedAt, plan: 'ultra', bundle: { profile, tweets: [], mentionedPeople: [], mentions: [] } });
+    const calls: string[] = [];
+    vi.stubGlobal('fetch', routes(calls));
+    const pro = await lookupToken(EVM, undefined, 'eth', {}, true, { plan: PLANS.pro, library: true, mayFetch: async () => false });
+    expect(pro).toMatchObject({ communitySource: 'library', communityFrom: 'ultra', capped: true, checked: { community: savedAt } });
+    expect(calls.some((url) => url.includes('/api/twitter'))).toBe(false);
+  });
+
+  it('gives a fresh check back when X fails', async () => {
+    const { PLANS } = await import('../plans/plans');
+    const { setLibraryStore, memoryLibrary } = await import('../plans/library');
+    setLibraryStore(memoryLibrary());
     vi.stubGlobal(
       'fetch',
-      vi.fn(async (input: RequestInfo | URL) => {
-        const url = String(input);
-        calls.push(url);
-        if (url.includes('/users/by/username/') && url.includes('expansions=most_recent_tweet_id')) {
-          return Response.json({
-            data: { id: '1', username: 'pepecoineth', public_metrics: { followers_count: 500_000 } },
-            includes: { tweets: [{ id: '9', public_metrics: { like_count: 5000, reply_count: 900, retweet_count: 800 } }] },
-          });
-        }
-        if (url.includes('counts/recent')) return Response.json({ meta: { total_tweet_count: 5000 } });
-        return routes([])(input);
-      }),
+      vi.fn(async (input: RequestInfo | URL) => (String(input).includes('/api/twitter') ? new Response(null, { status: 503 }) : routes([])(input))),
     );
-
-    const free = await lookupToken(EVM, undefined, 'eth', {}, false, {
-      plan: PLANS.free,
-      library: true,
-      mayCheckBasic: async () => true,
-      spent: (cost) => spent.push(cost),
-    });
-    expect(free).toMatchObject({ communitySource: 'basic', communityFrom: 'basic', community: { basic: true, official: { followers: 500_000, tweetsLookedAt: 1 } } });
-    // A busy account would score higher on a full check; a basic one tops out at 65.
-    expect(free.community?.score).toBe(65);
-    expect(spent).toEqual([0.02]);
-    expect(calls.some((url) => url.includes('search/recent') || url.includes('/tweets?'))).toBe(false);
-
-    calls.length = 0;
-    const again = await lookupToken(EVM, undefined, 'eth', {}, false, { plan: PLANS.free, library: true, mayCheckBasic: async () => true });
-    expect(again).toMatchObject({ communitySource: 'library', communityFrom: 'basic' });
-    expect(calls.some((url) => url.includes('/api/twitter'))).toBe(false);
-
-    // Pro never takes a basic check as its own.
-    calls.length = 0;
-    const pro = await lookupToken(EVM, undefined, 'eth', {}, false, { plan: PLANS.pro, library: true });
-    expect(pro.communitySource).toBe('fetched');
-    expect(calls.some((url) => url.includes('search/recent'))).toBe(true);
+    const done: boolean[] = [];
+    await lookupToken(EVM, undefined, 'eth', {}, false, { plan: PLANS.pro, library: true, mayFetch: async () => true, fetchDone: (read) => done.push(read) });
+    expect(done).toEqual([false]);
   });
 
   it('a basic check asks for the account and then its posts when X refuses the latest-post field', async () => {

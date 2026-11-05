@@ -110,7 +110,7 @@ export async function writeLibrary(network: InsightXNetwork, address: string, de
 }
 
 /**
- * Free prefers an Ultra result to a Pro one (it read more of X), unless the Pro one is
+ * Once a member's fresh checks are used up, an Ultra result beats a Pro one (it read more of X), unless the Pro one is
  * this much newer: a week-old deep read says less than yesterday's standard one.
  */
 export const ULTRA_PREFERRED_MS = 7 * 24 * 60 * 60_000;
@@ -119,24 +119,26 @@ export const ULTRA_PREFERRED_MS = 7 * 24 * 60 * 60_000;
 export type Choice =
   | { use: LibraryEntry; from: Source }
   | { expand: LibraryEntry }
-  | { fetch: true };
+  | { fetch: true }
+  | { none: true };
 
 /**
  * The trickle-down rules.
- * - Free: the saved Ultra result, else Pro, whatever its age (Ultra unless Pro is a week
- *   newer); else an earlier basic check. Pro and Ultra never use a basic check.
- * - Pro: a saved Ultra or Pro result no older than `maxAgeSeconds`, Ultra first.
- * - Ultra: a saved Ultra result no older than `maxAgeSeconds`; else read on from a Pro
- *   result that young instead of starting again.
- * Otherwise fetch at the plan's own depth. A re-check passes 0 and always fetches.
+ * - With fresh checks left this month: a saved Ultra or Pro result no older than
+ *   `maxAgeSeconds`, Ultra first (Free and Pro); for Ultra, a saved Ultra result that young,
+ *   else read on from a Pro result that young instead of starting again. Otherwise fetch at
+ *   the plan's own depth. A re-check passes 0 and always fetches.
+ * - With none left (`capped`): the newest useful saved result of any age: Ultra, unless the
+ *   Pro one is a week newer; else Pro; else an earlier basic check. Nothing saved: no
+ *   Community ('none').
  */
-export function choose(plan: Plan, shelf: Shelf, maxAgeSeconds: number, now = Date.now()): Choice {
+export function choose(plan: Plan, shelf: Shelf, maxAgeSeconds: number, now = Date.now(), capped = false): Choice {
   const { pro, ultra } = shelf;
-  if (plan.community === 'library') {
+  if (capped) {
     if (ultra && (!pro || pro.savedAt - ultra.savedAt <= ULTRA_PREFERRED_MS)) return { use: ultra, from: 'ultra' };
     if (pro) return { use: pro, from: 'pro' };
     if (shelf.basic) return { use: shelf.basic, from: 'basic' };
-    return { fetch: true };
+    return { none: true };
   }
   const young = (entry?: LibraryEntry): entry is LibraryEntry => entry !== undefined && maxAgeSeconds > 0 && now - entry.savedAt <= maxAgeSeconds * 1000;
   if (young(ultra)) return { use: ultra, from: 'ultra' };
