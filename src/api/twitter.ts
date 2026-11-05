@@ -72,6 +72,8 @@ export interface TwitterBundle {
   oldest?: { mention?: string; post?: string };
   /** A basic check (Free): followers, the latest post and the mention count only. */
   basic?: boolean;
+  /** The X search the mentions came from, so a deeper scan reads on with the same one. */
+  query?: string;
 }
 
 /** Posts come newest first, so the last one is the oldest. */
@@ -127,15 +129,46 @@ function mentionsFrom(user: TwitterUser): string[] {
   return [...new Set([...fromEntities, ...fromAt].map((name) => name.toLowerCase()))];
 }
 
-function searchQuery(symbol?: string, name?: string, handle?: string) {
+/** What the X search is built from: the token's names, its contract address and its DEX link. */
+export interface XLookupInput {
+  handle?: string;
+  name?: string;
+  symbol?: string;
+  /** The contract address: posts that paste it, or link to any page with it in the URL. */
+  address?: string;
+  /** The DexScreener link of the token's main pool: posts that link to it. */
+  dexPair?: string;
+}
+
+/** X's recent search takes queries up to 512 characters. */
+const MAX_QUERY = 512;
+const ADDRESS = /^(0x[0-9a-fA-F]{40}|[1-9A-HJ-NP-Za-km-z]{32,44})$/;
+
+/**
+ * Posts about the token: its ticker, cashtag or name, or its contract address (pasted, or
+ * in any link such as dexscreener.com/solana/<address> or pump.fun/coin/<address>), or a
+ * link to its main DexScreener pool. The address and link tie mentions to this token, not
+ * to a copycat with the same ticker. The project's own posts and reposts are left out.
+ */
+export function searchQuery(input: XLookupInput): string | undefined {
   const parts: string[] = [];
-  const ticker = symbol?.replace(/[^A-Za-z0-9]/g, '');
+  const ticker = input.symbol?.replace(/[^A-Za-z0-9]/g, '');
   if (ticker) parts.push(`$${ticker}`, `#${ticker}`);
-  const phrase = name?.trim();
+  const address = input.address && ADDRESS.test(input.address) ? input.address : undefined;
+  if (address) parts.push(address, `url:${address}`);
+  const phrase = input.name?.trim();
   if (phrase && phrase.length <= 40) parts.push(`"${phrase.replaceAll('"', '')}"`);
+  const pair = input.dexPair?.replace(/^https?:\/\//, '');
+  if (pair && /^dexscreener\.com\/[a-z0-9-]+\/[A-Za-z0-9]+$/.test(pair)) parts.push(`url:"${pair}"`);
   if (parts.length === 0) return undefined;
-  const exclude = handle ? ` -from:${handle}` : '';
-  return `(${parts.join(' OR ')}) -is:retweet${exclude}`;
+  const exclude = input.handle ? ` -from:${input.handle}` : '';
+  // Drop the least specific extras (the pool link, then the name) if X's limit is near.
+  let query = `(${parts.join(' OR ')}) -is:retweet${exclude}`;
+  while (query.length > MAX_QUERY && parts.length > 1) {
+    parts.pop();
+    query = `(${parts.join(' OR ')}) -is:retweet${exclude}`;
+  }
+  return query;
 }
 
 const PROFILE_FIELDS = 'user.fields=public_metrics,name,username,description,url,entities';
@@ -233,13 +266,13 @@ async function fetchMentionTotal(query: string, signal?: AbortSignal, share?: Sh
 }
 
 export async function fetchTwitterBundle(
-  input: { handle?: string; name?: string; symbol?: string },
+  input: XLookupInput,
   signal?: AbortSignal,
   shareSeconds?: number,
   depth: XDepth = PLANS.pro.x,
 ): Promise<TwitterBundle> {
   const share: Share = { seconds: shareSeconds };
-  const query = searchQuery(input.symbol, input.name, input.handle);
+  const query = searchQuery(input);
   const [profileResult, mentionResult, totalResult] = await Promise.allSettled([
     input.handle ? fetchProfile(input.handle, signal, share) : Promise.resolve(undefined),
     query ? fetchMentions(query, depth.mentions, signal, share) : Promise.resolve({ mentions: [], oldest: undefined }),
@@ -263,6 +296,7 @@ export async function fetchTwitterBundle(
     mentionTotal: totalResult.status === 'fulfilled' ? totalResult.value : undefined,
     read: depth,
     oldest: { mention: sample.oldest, post: posts.oldest },
+    ...(query && { query }),
   };
 }
 
@@ -274,13 +308,14 @@ export async function fetchTwitterBundle(
  */
 export async function expandTwitterBundle(
   base: TwitterBundle,
-  input: { handle?: string; name?: string; symbol?: string },
+  input: XLookupInput,
   depth: XDepth,
   signal?: AbortSignal,
 ): Promise<TwitterBundle> {
   const read = base.read ?? PLANS.pro.x;
   const share: Share = {};
-  const query = searchQuery(input.symbol, input.name, input.handle);
+  // Read on with the search the saved mentions came from, so older pages line up.
+  const query = base.query ?? searchQuery(input);
   // Fewer posts than asked for means X had no more; there is nothing older to read.
   const moreMentions = query && base.oldest?.mention && base.mentions.length >= read.mentions ? depth.mentions - read.mentions : 0;
   const morePosts = base.profile && base.oldest?.post && base.tweets.length >= read.ownPosts ? depth.ownPosts - read.ownPosts : 0;
@@ -316,12 +351,12 @@ export const BASIC_CHECK_MAX_COST = 0.04;
  * a recent full scan's profile and count cost nothing here. Returns what it cost at most.
  */
 export async function fetchBasicBundle(
-  input: { handle?: string; name?: string; symbol?: string },
+  input: XLookupInput,
   signal?: AbortSignal,
   shareSeconds?: number,
 ): Promise<{ bundle: TwitterBundle; cost: number }> {
   const share: Share = { seconds: shareSeconds };
-  const query = searchQuery(input.symbol, input.name, input.handle);
+  const query = searchQuery(input);
   let cost = 0;
   const profileWork = (async () => {
     if (!input.handle) return { profile: undefined, latest: [] as TwitterTweet[] };
@@ -366,6 +401,7 @@ export async function fetchBasicBundle(
       mentionTotal: totalResult.status === 'fulfilled' ? totalResult.value : undefined,
       read: { mentions: 0, ownPosts: 1, bioPeople: 0 },
       basic: true,
+      ...(query && { query }),
     },
     cost,
   };

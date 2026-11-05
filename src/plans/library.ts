@@ -1,4 +1,4 @@
-import type { InsightXNetwork } from '../adapters';
+import type { DexLinks, InsightXNetwork } from '../adapters';
 import type { TwitterBundle } from '../api/twitter';
 import type { Plan, PlanId, Source } from './plans';
 
@@ -24,6 +24,18 @@ export interface LibraryEntry {
   /** The plan of the scan that fetched them. */
   plan: PlanId;
   bundle: TwitterBundle;
+  /**
+   * Which token this X data is about: its chain, contract address and DexScreener links.
+   * Missing on entries saved before 2026-11-05.
+   */
+  token?: SavedToken;
+}
+
+export interface SavedToken {
+  network: InsightXNetwork;
+  /** The contract address as scanned (Solana addresses keep their case). */
+  address: string;
+  dex?: DexLinks;
 }
 
 const MEMORY_LIMIT = 5_000;
@@ -70,7 +82,10 @@ async function readOne(network: InsightXNetwork, address: string, depth: Source)
     const raw = await store.get(keyOf(network, address, depth));
     if (!raw) return undefined;
     const entry = JSON.parse(raw) as LibraryEntry;
-    return typeof entry.savedAt === 'number' && entry.bundle ? entry : undefined;
+    if (typeof entry.savedAt !== 'number' || !entry.bundle) return undefined;
+    // Never hand back X data saved for another token.
+    if (entry.token && (entry.token.network !== network || entry.token.address.toLowerCase() !== address.toLowerCase())) return undefined;
+    return entry;
   } catch (error) {
     console.error('library read failed:', error instanceof Error ? error.message : error);
     return undefined;
