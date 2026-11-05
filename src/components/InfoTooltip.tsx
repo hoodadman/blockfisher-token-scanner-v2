@@ -3,10 +3,12 @@ import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
 interface InfoTooltipProps {
   label: string;
   children: ReactNode;
+  /** Which edge of the icon the box lines up with. Use 'start' when the icon sits near the left of its box. */
+  align?: 'start' | 'end';
 }
 
 /** Opens on mouse hover or keyboard focus, and stays open when clicked or tapped. */
-export function InfoTooltip({ label, children }: InfoTooltipProps) {
+export function InfoTooltip({ label, children, align = 'end' }: InfoTooltipProps) {
   const id = useId();
   const anchor = useRef<HTMLSpanElement>(null);
   const [hovered, setHovered] = useState(false);
@@ -61,7 +63,7 @@ export function InfoTooltip({ label, children }: InfoTooltipProps) {
           <circle cx="10" cy="6.3" r="1.05" fill="currentColor" />
         </svg>
       </button>
-      <span role="tooltip" id={id} className="tip" hidden={!open}>
+      <span role="tooltip" id={id} className={align === 'start' ? 'tip tip--start' : 'tip'} hidden={!open}>
         {children}
       </span>
     </span>

@@ -2,6 +2,7 @@ import { useId, useState } from 'react';
 import { groupSecurity, type GroupedCheck, type TrustReport } from '../scoring';
 import { InfoTooltip } from './InfoTooltip';
 import { MetricList, MetricRow } from './Metrics';
+import { PILLAR_HELP } from './pillarHelp';
 import './TrustScore.css';
 import './ScorePanel.css';
 
@@ -49,7 +50,9 @@ export function ScorePanel({ security, defaultOpen = true }: { security: TrustRe
       <div id={panelId} className="ts__panel panel__body" hidden={!open}>
         <h3 className="panel-section__title">
           Security
-          <InfoTooltip label="Security">Can the people who made this token still take your money, or switch the rules?</InfoTooltip>
+          <InfoTooltip label="Security" align="start">
+            {PILLAR_HELP.security}
+          </InfoTooltip>
         </h3>
         <MetricList>
           {issues.length === 0 && passed.length > 0 && (

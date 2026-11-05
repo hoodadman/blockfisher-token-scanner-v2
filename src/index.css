@@ -203,9 +203,50 @@ body {
   color: var(--muted);
 }
 
+.token__contract {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem 0.6rem;
+  margin-top: 0.35rem;
+}
+
+.token__contract-label {
+  flex-basis: 100%;
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
 .token__address {
+  min-width: 0;
+  color: var(--text);
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 0.92rem;
+  overflow-wrap: anywhere;
+}
+
+.token__copy {
+  padding: 0.2rem 0.6rem;
+  background: none;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--text);
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.token__copy:hover {
+  border-color: var(--accent);
+}
+
+.token__copy:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
 }
 
 .notice {

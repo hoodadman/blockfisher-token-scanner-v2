@@ -17,6 +17,24 @@
   text-transform: uppercase;
 }
 
+.brief__heading {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+/* Line the box up with the heading, not the small icon, so it fits on a phone. */
+.brief__heading .tip-anchor {
+  position: static;
+}
+
+.brief__heading .tip-trigger {
+  width: 24px;
+  height: 24px;
+  margin: -4px 0;
+}
+
 .brief__block p {
   margin: 0;
   color: var(--text, #e7eef6);

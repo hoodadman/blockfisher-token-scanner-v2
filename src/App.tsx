@@ -170,12 +170,8 @@ function Result({ report: scan, onRecheck }: { report: ScanReport; onRecheck: ()
           {name ?? 'Unnamed token'}
           {showSymbol && <span className="token__symbol">{symbol}</span>}
         </p>
-        <p className="token__meta">
-          {chain.name} ·{' '}
-          <span className="token__address" title={address}>
-            {address.slice(0, 6)}…{address.slice(-4)}
-          </span>
-        </p>
+        <p className="token__meta">{chain.name}</p>
+        <ContractAddress address={address} />
       </div>
 
       {failures.length > 0 && (
@@ -212,6 +208,32 @@ function Result({ report: scan, onRecheck }: { report: ScanReport; onRecheck: ()
         <ScorePanel security={report} />
       </div>
     </div>
+  );
+}
+
+/** The full contract address under the token's name, so people can check it matches what they meant to buy. */
+function ContractAddress({ address }: { address: string }) {
+  const [copied, setCopied] = useState(false);
+  useEffect(() => {
+    if (!copied) return;
+    const timer = setTimeout(() => setCopied(false), 2000);
+    return () => clearTimeout(timer);
+  }, [copied]);
+  return (
+    <p className="token__contract">
+      <span className="token__contract-label">Contract address</span>
+      <span className="token__address">{address}</span>
+      <button
+        type="button"
+        className="token__copy"
+        onClick={() => navigator.clipboard?.writeText(address).then(() => setCopied(true), () => undefined)}
+      >
+        {copied ? 'Copied' : 'Copy'}
+      </button>
+      <span className="visually-hidden" aria-live="polite">
+        {copied ? 'Address copied' : ''}
+      </span>
+    </p>
   );
 }
 

@@ -2,7 +2,9 @@ import { useId, useState, type ReactNode } from 'react';
 import type { CommunityReport } from '../community';
 import type { FoundationReport } from '../foundation';
 import type { PillarBrief } from '../summary';
+import { InfoTooltip } from './InfoTooltip';
 import { formatCount, MetricList, MetricRow } from './Metrics';
+import { PILLAR_HELP, type PillarId } from './pillarHelp';
 import './TrustScore.css';
 import './ScorePanel.css';
 import './ScoreBrief.css';
@@ -20,13 +22,13 @@ export function ScoreBrief({
   return (
     <section className="brief" aria-label="Plain-English summary">
       <div className="brief__block">
-        <h3>Security</h3>
+        <PillarHeading id="security" title="Security" />
         <p>{brief.security}</p>
       </div>
-      <BriefDrop title="Community" text={brief.community}>
+      <BriefDrop id="community" title="Community" text={brief.community}>
         <CommunityRows report={community} />
       </BriefDrop>
-      <BriefDrop title="Foundation" text={brief.foundation}>
+      <BriefDrop id="foundation" title="Foundation" text={brief.foundation}>
         {foundation.facts.map((fact) => (
           <MetricRow key={fact.id} title={fact.label} note={fact.summary} tone={fact.status} tip={fact.details} />
         ))}
@@ -35,12 +37,24 @@ export function ScoreBrief({
   );
 }
 
-function BriefDrop({ title, text, children }: { title: string; text: string; children: ReactNode }) {
+/** A pillar's name with an (i) that says what the pillar checks. */
+function PillarHeading({ id, title }: { id: PillarId; title: string }) {
+  return (
+    <h3 className="brief__heading">
+      {title}
+      <InfoTooltip label={title} align="start">
+        {PILLAR_HELP[id]}
+      </InfoTooltip>
+    </h3>
+  );
+}
+
+function BriefDrop({ id, title, text, children }: { id: PillarId; title: string; text: string; children: ReactNode }) {
   const [open, setOpen] = useState(false);
   const panelId = useId();
   return (
     <div className="brief__block">
-      <h3>{title}</h3>
+      <PillarHeading id={id} title={title} />
       <p>{text}</p>
       <button
         type="button"
