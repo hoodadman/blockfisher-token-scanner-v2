@@ -111,6 +111,7 @@ describe('scoreToken', () => {
   it('scores 0 for every confirmed flag that stops you selling', () => {
     const cases: Array<[Partial<TokenSignals>, string]> = [
       [{ honeypotRisk: 90 }, 'honeypot'],
+      [{ sellFeePct: 50.1 }, 'fees'],
       [{ sellFeePct: 90 }, 'fees'],
       [{ transferFeePct: 100 }, 'fees'],
       [{ tradingPaused: true }, 'pause'],
@@ -140,7 +141,8 @@ describe('scoreToken', () => {
       { canPause: true },
       { hasBlacklist: true },
       { cannotSellAll: true },
-      { sellFeePct: 89 },
+      { sellFeePct: 50 },
+      { transferFeePct: 50 },
       { buyFeePct: 99 },
     ];
     for (const flags of cases) {
@@ -185,9 +187,19 @@ describe('scoreToken', () => {
     expect(report.coverage).toEqual({ checked: 3, total: 12 });
   });
 
-  it('grades fees at 5%, 10% and 30%', () => {
+  it('grades tax: flag at 10%, flag heavily over 25%, score 0 over 50%', () => {
     const severityFor = (fee: number) => score({ ...cleanEvm, sellFeePct: fee }).issues[0]?.severity ?? null;
-    expect([4.9, 5, 10, 30].map(severityFor)).toEqual([null, 'minor', 'warning', 'critical']);
+    expect([4.9, 5, 9.9, 10, 25, 25.1, 50].map(severityFor)).toEqual([null, 'minor', 'minor', 'warning', 'warning', 'critical', 'critical']);
+    const scoreFor = (fee: number) => score({ ...cleanEvm, sellFeePct: fee });
+    expect([10, 25, 25.1, 50].map((fee) => scoreFor(fee).fatal)).toEqual([null, null, null, null]);
+    expect(scoreFor(25.1).score).toBeLessThanOrEqual(39);
+    expect(scoreFor(50.1).score).toBe(0);
+  });
+
+  it('flags a high buy tax but never scores 0 for it, since it doesn’t stop you selling', () => {
+    const report = score({ ...cleanEvm, buyFeePct: 80 });
+    expect(report.fatal).toBeNull();
+    expect(report.issues[0].severity).toBe('critical');
   });
 
   it('fills the measured value into the wording', () => {
