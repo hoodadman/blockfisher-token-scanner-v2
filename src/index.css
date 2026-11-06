@@ -268,6 +268,13 @@ body {
   color: var(--danger);
 }
 
+/* Shown at the top of a scan once the month's fresh community checks are used up. */
+.notice--cap {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--text);
+}
+
 html[data-theme="light"] {
   color-scheme: light;
   --bg: #f4f1ea;

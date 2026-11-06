@@ -48,6 +48,10 @@ export interface ScanReport {
   secondOpinion?: SecondOpinion;
   /** True when this month's fresh community checks were used up, so a saved result (or none) was shown. */
   capped?: boolean;
+  /** This month's fresh community checks; added by the server for the account that scanned. */
+  freshChecks?: FreshChecks;
+  /** Shown at the top of the result once this month's fresh community checks are used up. */
+  capAlert?: string;
   /** Plain-language notes about this result, for the card. */
   notes: string[];
 }
@@ -66,18 +70,40 @@ const MORE: Partial<Record<PlanId, string>> = {
 };
 
 /** What a user should know about where this result came from. */
-export function planNotes(report: Pick<ScanReport, 'plan' | 'communitySource' | 'communityFrom' | 'checked' | 'capped'>, now = Date.now()): string[] {
+export function planNotes(report: Pick<ScanReport, 'plan' | 'communitySource' | 'communityFrom' | 'checked' | 'capped'>): string[] {
   const notes: string[] = [];
-  const more = MORE[report.plan] ?? '';
-  if (report.capped && report.communitySource === 'skipped') {
-    notes.push(`This month’s fresh community checks are used up and nobody has scanned this token before, so this scan shows Security and Foundation only. Security ran fresh.${more}`);
-  } else if (report.capped && report.checked.community !== undefined) {
-    notes.push(`This month’s fresh community checks are used up, so Community and Foundation come from a saved scan ${ageText(report.checked.community, now)}. Security ran fresh.${more}`);
-  }
+  // Running out of fresh community checks is shown as `capAlert`, at the top of the result.
   if (report.communityFrom === 'basic') {
     notes.push('Basic community check: followers, the latest post and how often the token was mentioned this week. A full check also reads who is talking about it.');
   }
   return notes;
+}
+
+/** This month's fresh community checks, as the server counts them (plans/allowance.ts). */
+export interface FreshChecks {
+  used: number;
+  limit: number;
+  left: number;
+  /** When they reset (ms, UTC). */
+  resetsAt: number;
+}
+
+const resetDay = (at: number) => new Date(at).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', timeZone: 'UTC' });
+
+/**
+ * The alert shown at the top of a scan once this month's fresh community checks are used
+ * up; undefined while some are left. Security is never capped, so it says so.
+ */
+export function capAlert(report: Pick<ScanReport, 'plan' | 'communitySource' | 'checked' | 'capped'>, checks: FreshChecks, now = Date.now()): string | undefined {
+  if (!report.capped && checks.left > 0) return undefined;
+  const lead = `You’ve used all ${checks.limit} of this month’s fresh community checks.`;
+  const shown =
+    report.communitySource === 'skipped'
+      ? ' Nobody has scanned this token before, so Community isn’t shown.'
+      : report.capped && report.checked.community !== undefined
+        ? ` Community and Foundation are from a saved scan ${ageText(report.checked.community, now)}.`
+        : ' Until they reset, Community and Foundation show the latest saved scan.';
+  return `${lead}${shown} Security still runs fresh on every scan. Your checks reset on ${resetDay(checks.resetsAt)}.${MORE[report.plan] ?? ''}`;
 }
 
 function mark(score: number | null): string {

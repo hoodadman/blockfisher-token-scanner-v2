@@ -143,13 +143,17 @@ describe('monthly fresh community checks', () => {
     vi.stubGlobal('fetch', recording(calls));
     for (let i = 101; i <= 104; i++) {
       const reply = await handleScan({ ...tokenWithX(i), plan: 'free' }, 'free-monthly');
-      expect((reply.body as { report: { communitySource: string } }).report.communitySource).toBe('fetched');
+      const report = (reply.body as { report: { communitySource: string; capAlert?: string } }).report;
+      expect(report.communitySource).toBe('fetched');
+      // The alert shows from the scan that used the last one.
+      if (i < 104) expect(report.capAlert).toBeUndefined();
+      else expect(report.capAlert).toMatch(/used all 4/);
     }
     calls.length = 0;
     const fifth = await handleScan({ ...tokenWithX(105), plan: 'free' }, 'free-monthly');
-    const body = fifth.body as { report: { communitySource: string; capped: boolean; notes: string[] }; freshChecks: { used: number; left: number } };
-    expect(body.report).toMatchObject({ communitySource: 'skipped', capped: true });
-    expect(body.report.notes.join(' ')).toMatch(/fresh community checks are used up.*Security ran fresh/);
+    const body = fifth.body as { report: { communitySource: string; capped: boolean; capAlert?: string; freshChecks?: { left: number } }; freshChecks: { used: number; left: number } };
+    expect(body.report).toMatchObject({ communitySource: 'skipped', capped: true, freshChecks: { left: 0 } });
+    expect(body.report.capAlert).toMatch(/used all 4 of this month’s fresh community checks.*Security still runs fresh on every scan.*Pro gives 30/);
     expect(body.freshChecks).toMatchObject({ used: 4, left: 0 });
     expect(calls.some((url) => url.includes('/api/twitter'))).toBe(false);
     expect(calls.some((url) => url.includes('gopluslabs'))).toBe(true);

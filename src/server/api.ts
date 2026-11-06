@@ -7,7 +7,7 @@ import { setApiHosts, type ApiHosts } from '../api/hosts';
 import { DISCORD_CODE, TELEGRAM_NAME, parseTelegramPage, type ChatCounts } from '../api/chats';
 import { identify, parseCandidates, type IdentifiedToken } from '../api/identify';
 import { LookupError, isTokenAddress, type LookupOptions, type Prefetched } from '../api/lookup';
-import { scanErrorText, scanReport, scanText, type ScanReport } from '../api/scan';
+import { capAlert, scanErrorText, scanReport, scanText, type ScanReport } from '../api/scan';
 import { parsePrefetched } from './prefetched';
 import { MonthlyAllowance, type AllowanceStatus } from '../plans/allowance';
 import { DailyBudget } from '../plans/budget';
@@ -236,11 +236,18 @@ export async function handleScan(body: unknown, requestClient: string, accessKey
   return work;
 }
 
-/** Adds what's left of the month's fresh community checks to a scan reply. */
+/**
+ * Adds what's left of the month's fresh community checks to a scan reply, and the alert
+ * for the top of the result once they are used up. The cached report is shared, so this
+ * works on a copy.
+ */
 async function withAllowance(reply: ApiReply, client: string, plan: Plan): Promise<ApiReply> {
   if (reply.status !== 200) return reply;
   const status: AllowanceStatus = await allowance.status(client, plan.freshPerMonth);
-  return { ...reply, body: { ...(reply.body as object), freshChecks: status } };
+  const body = reply.body as { report: ScanReport };
+  const alert = capAlert(body.report, status);
+  const report: ScanReport = { ...body.report, freshChecks: status, ...(alert ? { capAlert: alert } : {}) };
+  return { ...reply, body: { ...body, report, freshChecks: status } };
 }
 
 async function runScan(
