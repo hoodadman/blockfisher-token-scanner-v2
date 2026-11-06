@@ -45,6 +45,10 @@ export function readHoneypot(body: HoneypotAnswer): Answer {
   if (body.honeypotResult?.isHoneypot) {
     signals.honeypotRisk = 100;
     findings.push('A test sale failed: you may not be able to sell this token.');
+  } else if (body.simulationSuccess === true && body.honeypotResult?.isHoneypot === false) {
+    // The test buy and sale both went through: a passed sell test. Merged with worseOf, so it
+    // never cancels another source that found a honeypot; it fills in when that source had none.
+    signals.honeypotRisk = 0;
   } else if (body.simulationSuccess === false) {
     findings.push('A test buy and sale could not be run, so selling is unconfirmed.');
   }
@@ -89,6 +93,16 @@ export function readRugCheck(body: RugCheckAnswer): Answer {
     .map((risk) => [risk.name, risk.description].filter(Boolean).join(': '))
     .filter(Boolean);
   return { opinion: { source: 'RugCheck', ok: true, findings }, signals };
+}
+
+/**
+ * The sell test alone, for scans whose first source had no result for it. Undefined when
+ * Honeypot.is doesn't cover the chain or couldn't run the test. Never throws.
+ */
+export async function fetchSellTest(network: InsightXNetwork, address: string, signal?: AbortSignal): Promise<number | undefined> {
+  if (network === 'sol' || !HONEYPOT_CHAIN[network]) return undefined;
+  const answer = await fetchSecondOpinion(network, address, signal);
+  return answer?.signals.honeypotRisk;
 }
 
 /** Undefined when no second opinion covers the chain. Never throws. */

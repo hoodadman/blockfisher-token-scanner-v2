@@ -250,7 +250,10 @@ describe('scoreToken', () => {
 
   it('says plainly when a Solana sell test can’t run', () => {
     const report = score({ ...cleanSolana, honeypotRisk: undefined });
-    expect(report.issues[0]).toMatchObject({ id: 'honeypot', severity: 'warning', title: 'We can’t test selling on Solana yet' });
+    expect(report.issues[0]).toMatchObject({ id: 'honeypot', severity: 'warning', title: 'Sell test not available on Solana yet' });
+    expect(report.issues[0].summary).toMatch(/does not mean you can’t sell/);
+    expect(report.issues[0].unconfirmed).toBe(true);
+    expect(report.fatal).toBeNull();
     expect(report.passed.map((item) => item.id)).not.toContain('honeypot');
     expect(report.score).toBe(70);
     expect(score({ ...cleanEvm, honeypotRisk: undefined }).issues[0].title).toBe('Sell test couldn’t run');

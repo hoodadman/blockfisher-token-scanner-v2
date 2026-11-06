@@ -24,7 +24,7 @@ import { apiHosts } from './hosts';
 import { SHARE_HEADER, savedAt, shareSeconds } from './share';
 import { chatLinksFromDexScreener, fetchChatCounts } from './chats';
 import { communityFromBundle, expandTwitterBundle, fetchTwitterBundle, TwitterError, type TwitterBundle } from './twitter';
-import { fetchSecondOpinion, worseOf, type SecondOpinion } from './secondOpinion';
+import { fetchSecondOpinion, fetchSellTest, worseOf, type SecondOpinion } from './secondOpinion';
 import { choose, readLibrary, writeLibrary, type LibraryEntry, type Shelf } from '../plans/library';
 import { PLANS, type Plan, type Source } from '../plans/plans';
 
@@ -307,7 +307,13 @@ export async function lookupToken(
     goPlus: scan.status === 'fulfilled' ? scan.value : undefined,
     insightXDexMetrics: holders.status === 'fulfilled' ? holders.value : undefined,
   });
-  const signals = secondOpinion ? worseOf(firstOpinion, secondOpinion.signals) : firstOpinion;
+  let signals = secondOpinion ? worseOf(firstOpinion, secondOpinion.signals) : firstOpinion;
+  // GoPlus leaves out its sell test for some tokens (often new or thinly traded ones). Ask
+  // Honeypot.is to run one, on every plan, rather than show "couldn't confirm".
+  if (signals.honeypotRisk === undefined && !secondOpinion) {
+    const sellTest = await fetchSellTest(chain.network, address, signal);
+    if (sellTest !== undefined) signals = { ...signals, honeypotRisk: sellTest };
+  }
   const bundle = twitterBundle.status === 'fulfilled' ? twitterBundle.value : undefined;
   // Whatever this scan paid for goes back in the library for everyone else.
   if (bundle && communitySource !== 'library' && communitySource !== 'skipped' && options.library) {

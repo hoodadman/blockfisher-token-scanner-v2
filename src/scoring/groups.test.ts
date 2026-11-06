@@ -71,3 +71,20 @@ describe('groupSecurity', () => {
     expect(seize?.summary).toBe('We checked 2 of 3 things here; owner can change balance couldn’t be checked.');
   });
 });
+
+describe('an unrun sell test', () => {
+  const selling = (signals: TokenSignals) =>
+    groupSecurity(scoreToken(signals, { now: NOW })).find((group) => group.id === 'selling');
+
+  it('reads as unchecked, not as "you can’t sell"', () => {
+    const row = selling({ ...cleanEvm, honeypotRisk: undefined });
+    expect(row).toMatchObject({ status: 'unknown', label: 'Can you sell' });
+    expect(row?.summary).toMatch(/does not mean you can’t sell/);
+    expect(row?.details).not.toMatch(/selling is blocked/);
+  });
+
+  it('still shows a real problem in the same group as an issue', () => {
+    const row = selling({ ...cleanEvm, honeypotRisk: undefined, cannotSellAll: true });
+    expect(row).toMatchObject({ status: 'issue', summary: 'You might not be allowed to sell all your tokens when you want.' });
+  });
+});
