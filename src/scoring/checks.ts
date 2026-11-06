@@ -7,8 +7,14 @@ type Rule = readonly [threshold: number, tier: Tier];
 
 const HOUR = 3_600_000;
 
-/** A sell or transfer tax at or above this stops you getting your money back, so the score is 0. */
-export const EXIT_FEE_FATAL_PCT = 90;
+/**
+ * Tax lines (H, 2026-11-06). Anything that stops you getting your money out when you sell:
+ * 10% or more is flagged, over 25% is flagged heavily (critical, Security capped), and a
+ * sell or transfer tax over 50% scores 0.
+ */
+export const EXIT_FEE_FATAL_PCT = 50;
+export const FEE_HEAVY_PCT = 25;
+export const FEE_FLAG_PCT = 10;
 
 function atLeast(value: number | undefined, rules: readonly Rule[]) {
   if (value === undefined) return undefined;
@@ -163,38 +169,42 @@ export const CHECKS: readonly CheckDefinition[] = [
     category: 'security',
     measure: describeFee,
     evaluate: (s) => {
-      // A sell or transfer tax this high takes (nearly) everything you'd get back.
+      // A sell or transfer tax over half takes most of what you'd get back.
       const exitFee = Math.max(s.sellFeePct ?? 0, s.transferFeePct ?? 0);
-      if (exitFee >= EXIT_FEE_FATAL_PCT) {
+      if (exitFee > EXIT_FEE_FATAL_PCT) {
         return {
           severity: 'critical',
           points: 100,
           fatal: true,
-          title: 'Selling takes almost everything',
-          summary: `The token takes ${percent(exitFee)} when you ${(s.sellFeePct ?? 0) >= exitFee ? 'sell' : 'send or sell'}, so you get little or nothing back.`,
+          title: `You’d lose ${percent(exitFee)} of your money`,
+          summary: `You will lose ${percent(exitFee)} of your money to tax when you ${(s.sellFeePct ?? 0) >= exitFee ? 'sell' : 'send or sell'}.`,
           details: tooltipFor('fees'),
         };
       }
-      return atLeast(highestFee(s), [
-        [30, {
+      const fee = highestFee(s);
+      if (fee === undefined) return undefined;
+      if (fee > FEE_HEAVY_PCT) {
+        return {
           severity: 'critical',
           points: 60,
-          title: 'Very high fees',
-          summary: 'The token charges {value}.',
+          title: 'Very high tax',
+          summary: 'You will lose {value}.',
           details: tooltipFor('fees'),
-        }],
-        [10, {
+        };
+      }
+      return atLeast(fee, [
+        [FEE_FLAG_PCT, {
           severity: 'warning',
           points: 20,
-          title: 'High fees',
-          summary: 'The token charges {value}.',
+          title: 'High tax',
+          summary: 'You will lose {value}.',
           details: tooltipFor('fees'),
         }],
         [5, {
           severity: 'minor',
           points: 5,
           title: 'Trading fees',
-          summary: 'The token charges {value}.',
+          summary: 'You will lose {value}.',
           details: tooltipFor('fees'),
         }],
       ]);
